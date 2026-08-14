@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.FsStructureCreator" parent="Theme.Material3.DayNight.NoActionBar">
+    <style name="Theme.FsStructureCreator" parent="android:Theme.Material.NoActionBar">
         <item name="android:statusBarColor">#161817</item>
         <item name="android:navigationBarColor">#161817</item>
         <item name="android:windowBackground">#161817</item>
