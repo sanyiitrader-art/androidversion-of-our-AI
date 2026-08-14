@@ -54,6 +54,9 @@ import com.fsstructurecreator.fs.FilesystemEngine
 import kotlinx.coroutines.launch
 import java.util.UUID
 
+private const val PREFS_NAME = "fs_prefs"
+private const val KEY_SELECTED_FOLDER_URI = "selected_folder_uri"
+
 private fun newMessage(role: MessageRole, content: String): ChatMessage {
     return ChatMessage(
         id = UUID.randomUUID().toString(),
@@ -80,6 +83,23 @@ private fun summarizeForAi(results: List<com.fsstructurecreator.data.FsOperation
     else "[Execution result]\n" + lines.joinToString("\n")
 }
 
+/** Returns the saved folder URI only if Android still actually grants
+ *  us write access to it -- if the permission was revoked (e.g. via
+ *  Android settings) since it was saved, this returns null and clears
+ *  the stale value, rather than letting a later filesystem call fail
+ *  with a confusing generic error. */
+private fun currentlyValidFolderUri(context: Context, prefs: android.content.SharedPreferences): String? {
+    val saved = prefs.getString(KEY_SELECTED_FOLDER_URI, null) ?: return null
+    val stillGranted = context.contentResolver.persistedUriPermissions.any {
+        it.uri.toString() == saved && it.isWritePermission
+    }
+    if (!stillGranted) {
+        prefs.edit().remove(KEY_SELECTED_FOLDER_URI).apply()
+        return null
+    }
+    return saved
+}
+
 @Composable
 fun ChatScreen() {
     val context = LocalContext.current
@@ -89,7 +109,7 @@ fun ChatScreen() {
     val settingsStore = remember { SettingsStore(context) }
     val geminiClient = remember { GeminiClient { settingsStore.getApiKey() } }
     val fsEngine = remember { FilesystemEngine(context) }
-    val prefs = remember { context.getSharedPreferences("fs_prefs", Context.MODE_PRIVATE) }
+    val prefs = remember { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
 
     var conversation by remember { mutableStateOf<Conversation?>(null) }
     var conversations by remember { mutableStateOf<List<ConversationSummary>>(emptyList()) }
@@ -121,12 +141,17 @@ fun ChatScreen() {
                 android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
                     android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             )
-            prefs.edit().putString("selected_folder_uri", uri.toString()).apply()
+            prefs.edit().putString(KEY_SELECTED_FOLDER_URI, uri.toString()).apply()
 
             val request = pendingFsRequest
             if (request != null) {
                 pendingFsRequest = null
-                scope.launch { executeAndRespond(request, uri.toString(), fsEngine, geminiClient, conversation, conversationStore) { conversation = it } }
+                scope.launch {
+                    executeAndRespond(
+                        request, uri.toString(), fsEngine, geminiClient,
+                        conversation, conversationStore
+                    ) { conversation = it }
+                }
             }
         }
     }
@@ -177,7 +202,7 @@ fun ChatScreen() {
                 var assistantText = turn.replyText
 
                 if (turn.fsRequest != null) {
-                    val savedFolder = prefs.getString("selected_folder_uri", null)
+                    val savedFolder = currentlyValidFolderUri(context, prefs)
                     if (savedFolder == null) {
                         pendingFsRequest = turn.fsRequest
                         folderPickerLauncher.launch(null)
@@ -295,6 +320,11 @@ fun ChatScreen() {
                     sidebarOpen = false
                 },
                 onEditApi = { editApiOpen = true },
+                onSelectFolder = {
+                    pendingFsRequest = null
+                    folderPickerLauncher.launch(null)
+                    sidebarOpen = false
+                },
                 onScrimClick = { sidebarOpen = false }
             )
         }

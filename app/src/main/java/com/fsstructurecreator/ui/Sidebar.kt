@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
@@ -41,6 +42,7 @@ fun Sidebar(
     onSelectConversation: (String) -> Unit,
     onNewChat: () -> Unit,
     onEditApi: () -> Unit,
+    onSelectFolder: () -> Unit,
     onScrimClick: () -> Unit
 ) {
     Row(modifier = Modifier.fillMaxSize()) {
@@ -69,6 +71,7 @@ fun Sidebar(
             )
 
             SidebarActionButton(icon = Icons.Filled.Edit, label = "Edit API", onClick = onEditApi)
+            SidebarActionButton(icon = Icons.Filled.Folder, label = "Select Folder", onClick = onSelectFolder)
             SidebarActionButton(icon = Icons.Filled.Add, label = "New Chat", onClick = onNewChat)
 
             LazyColumn(modifier = Modifier.padding(top = 8.dp)) {
