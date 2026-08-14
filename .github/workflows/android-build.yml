@@ -1,0 +1,48 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Generate app icons from source image
+        run: |
+          sudo apt-get update && sudo apt-get install -y imagemagick
+          declare -A sizes=( [mdpi]=48 [hdpi]=72 [xhdpi]=96 [xxhdpi]=144 [xxxhdpi]=192 )
+          for density in "${!sizes[@]}"; do
+            size=${sizes[$density]}
+            dir="app/src/main/res/mipmap-${density}"
+            mkdir -p "$dir"
+            convert icon-source.png -resize ${size}x${size} "$dir/ic_launcher.png"
+            convert icon-source.png -resize ${size}x${size} \
+              \( -size ${size}x${size} xc:none -fill white -draw "circle $((size/2)),$((size/2)) $((size/2)),0" \) \
+              -compose SrcIn -composite "$dir/ic_launcher_round.png"
+          done
+
+      - name: Build debug APK
+        run: gradle assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: fs-structure-creator-android-run${{ github.run_number }}
+          path: app/build/outputs/apk/debug/app-debug.apk
