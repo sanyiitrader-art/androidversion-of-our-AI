@@ -24,6 +24,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -41,6 +42,7 @@ fun EditorTopBar(
     onForward: () -> Unit,
     tree: WorkspaceNode?,
     openFileContent: String?,
+    currentFileName: String?,
     searchMode: WorkspaceSearchMode,
     onSearchModeChange: (WorkspaceSearchMode) -> Unit,
     onSelectFileResult: (String) -> Unit,
@@ -55,10 +57,14 @@ fun EditorTopBar(
         node.children.forEach { flattenFiles(it, acc) }
     }
 
+    // Prefix match, not "contains" -- matches the requested behavior:
+    // typing "w" then "o" then "r" then "d" narrows progressively as
+    // each new character is added, the same way VS Code's quick-open
+    // narrows on the start of the name.
     val fileResults: List<FileSearchResult> = if (searchMode == WorkspaceSearchMode.FILE_NAME && query.isNotBlank()) {
         val all = mutableListOf<WorkspaceNode>()
         flattenFiles(tree, all)
-        all.filter { it.name.contains(query, ignoreCase = true) }
+        all.filter { it.name.startsWith(query, ignoreCase = true) }
             .take(50)
             .map { FileSearchResult(it.uri, it.name, it.parentUri ?: "") }
     } else emptyList()
@@ -84,6 +90,11 @@ fun EditorTopBar(
                 Icon(Icons.Filled.ArrowForward, contentDescription = "Forward", tint = if (canGoForward) TextPrimary else TextTertiary)
             }
 
+            // No manual .clickable{} wrapper here on purpose -- one was
+            // previously stealing the tap before the field itself could
+            // gain real focus, which is why neither typing nor the
+            // "Search Text" button worked. OutlinedTextField already
+            // handles its own focus/tap correctly on its own.
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
@@ -99,7 +110,15 @@ fun EditorTopBar(
                     .fillMaxWidth()
                     .padding(start = 4.dp)
                     .background(CharcoalInput, RoundedCornerShape(8.dp))
-                    .clickable { focused = true }
+                    .onFocusEvent { focused = it.isFocused }
+            )
+        }
+
+        if (currentFileName != null) {
+            Text(
+                text = currentFileName,
+                color = TextSecondary,
+                modifier = Modifier.padding(start = 52.dp, top = 4.dp)
             )
         }
 

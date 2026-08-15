@@ -12,6 +12,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.fsstructurecreator.editor.EditorScreen
+import com.fsstructurecreator.editor.EditorSessionState
 import com.fsstructurecreator.ui.CharcoalBg
 import com.fsstructurecreator.ui.ChatScreen
 import com.fsstructurecreator.ui.FsStructureCreatorTheme
@@ -31,6 +32,12 @@ class MainActivity : ComponentActivity() {
 private fun App() {
     var screen by remember { mutableStateOf(TopLevelScreen.AI) }
 
+    // Created once here, at the app-session level, so it survives
+    // switching between the AI and editor screens -- it's only
+    // destroyed on a full app restart (spec: editor state must not
+    // reset just from navigating away and back).
+    val editorSession = remember { EditorSessionState() }
+
     FsStructureCreatorTheme {
         Surface(
             modifier = Modifier.fillMaxSize(),
@@ -42,6 +49,7 @@ private fun App() {
                     onSwipeToEditor = { screen = TopLevelScreen.EDITOR }
                 )
                 TopLevelScreen.EDITOR -> EditorScreen(
+                    session = editorSession,
                     onSwipeToAi = { screen = TopLevelScreen.AI }
                 )
             }

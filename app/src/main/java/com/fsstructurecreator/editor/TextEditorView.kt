@@ -10,9 +10,17 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.OffsetMapping
@@ -23,11 +31,16 @@ import androidx.compose.ui.unit.sp
 import com.fsstructurecreator.ui.CharcoalBg
 import com.fsstructurecreator.ui.TextPrimary
 import com.fsstructurecreator.ui.TextSecondary
+import kotlinx.coroutines.launch
+
+private val HighlightMint = Color(0x557EE8C0) // transparent mint
 
 @Composable
 fun TextEditorView(
     openFile: OpenFile?,
-    onContentChange: (String) -> Unit
+    onContentChange: (String) -> Unit,
+    highlightRequest: TextSearchResult?,
+    onHighlightConsumed: () -> Unit
 ) {
     if (openFile == null) {
         Box(modifier = Modifier.fillMaxSize().background(CharcoalBg)) {
@@ -41,23 +54,62 @@ fun TextEditorView(
     }
 
     val extension = openFile.name.substringAfterLast('.', "")
+    val scrollState = rememberScrollState()
+    val scope = rememberCoroutineScope()
 
-    val visualTransformation = remember(extension) {
+    var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    // Reset the active highlight whenever the open file changes, so a
+    // stale highlight from a previous file never lingers.
+    var activeHighlightRange by remember(openFile.uri) { mutableStateOf<IntRange?>(null) }
+
+    LaunchedEffect(highlightRequest, textLayout) {
+        val request = highlightRequest ?: return@LaunchedEffect
+        val layout = textLayout ?: return@LaunchedEffect
+
+        val start = absoluteOffset(openFile.content, request.lineNumber, request.matchStart)
+        val end = absoluteOffset(openFile.content, request.lineNumber, request.matchEnd)
+        if (start >= end || end > openFile.content.length) {
+            onHighlightConsumed()
+            return@LaunchedEffect
+        }
+
+        activeHighlightRange = start..end
+
+        val lineIndex = layout.getLineForOffset(start)
+        val targetTop = (layout.getLineTop(lineIndex) - 80f).toInt().coerceAtLeast(0)
+        scope.launch {
+            scrollState.animateScrollTo(targetTop.coerceAtMost(scrollState.maxValue))
+        }
+
+        // Clears the pending request in EditorScreen -- the highlight
+        // itself stays visible via activeHighlightRange above until a
+        // new search result is picked or the file changes.
+        onHighlightConsumed()
+    }
+
+    val visualTransformation = remember(extension, activeHighlightRange, openFile.content) {
         VisualTransformation { annotatedString ->
-            if (isHighlightableExtension(extension)) {
-                TransformedText(
-                    highlightSyntax(annotatedString.text, extension),
-                    OffsetMapping.Identity
-                )
+            val base = if (isHighlightableExtension(extension)) {
+                highlightSyntax(annotatedString.text, extension)
             } else {
-                TransformedText(annotatedString, OffsetMapping.Identity)
+                AnnotatedString(annotatedString.text)
             }
+
+            val range = activeHighlightRange
+            val result = if (range != null && range.last <= base.length) {
+                AnnotatedString.Builder(base).apply {
+                    addStyle(SpanStyle(background = HighlightMint), range.first, range.last)
+                }.toAnnotatedString()
+            } else base
+
+            TransformedText(result, OffsetMapping.Identity)
         }
     }
 
     OutlinedTextField(
         value = openFile.content,
         onValueChange = onContentChange,
+        onTextLayout = { textLayout = it },
         visualTransformation = visualTransformation,
         textStyle = TextStyle(
             fontFamily = FontFamily.Monospace,
@@ -76,6 +128,19 @@ fun TextEditorView(
             .fillMaxSize()
             .background(CharcoalBg)
             .padding(12.dp)
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(scrollState)
     )
+}
+
+/** Converts a (line number, column) search-result position into an
+ *  absolute character offset within the full file content, so it can
+ *  be used with TextLayoutResult for scroll positioning and with
+ *  AnnotatedString for highlighting. */
+private fun absoluteOffset(content: String, lineNumber: Int, column: Int): Int {
+    val lines = content.split("\n")
+    var offset = 0
+    for (i in 0 until (lineNumber - 1).coerceAtMost(lines.size)) {
+        offset += lines[i].length + 1 // +1 for the newline character
+    }
+    return (offset + column).coerceAtMost(content.length)
 }

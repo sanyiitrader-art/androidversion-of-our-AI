@@ -56,23 +56,22 @@ data class InlineEditState(
 )
 
 @Composable
-fun EditorScreen(onSwipeToAi: () -> Unit) {
+fun EditorScreen(
+    session: EditorSessionState,
+    onSwipeToAi: () -> Unit
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val store = remember { WorkspaceStore(context) }
 
-    var workspaceRoot by remember { mutableStateOf<String?>(null) }
-    var tree by remember { mutableStateOf<WorkspaceNode?>(null) }
-    var openFile by remember { mutableStateOf<OpenFile?>(null) }
-    var navHistory by remember { mutableStateOf(NavigationHistory()) }
+    // Transient UI-only state (fine to reset on navigation) stays
+    // local. Anything about "what workspace/file am I in" lives in
+    // `session` instead, so it survives switching to the AI screen.
     var explorerOpen by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
-    var autoSave by remember { mutableStateOf(false) }
-    var selectedUri by remember { mutableStateOf<String?>(null) }
-    var unsavedEdits by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var inlineEdit by remember { mutableStateOf<InlineEditState?>(null) }
     var searchMode by remember { mutableStateOf(WorkspaceSearchMode.FILE_NAME) }
-    var unsupportedFileMessage by remember { mutableStateOf<String?>(null) }
+    var highlightRequest by remember { mutableStateOf<TextSearchResult?>(null) }
 
     fun updateNode(node: WorkspaceNode, targetUri: String, transform: (WorkspaceNode) -> WorkspaceNode): WorkspaceNode {
         if (node.uri == targetUri) return transform(node)
@@ -81,10 +80,10 @@ fun EditorScreen(onSwipeToAi: () -> Unit) {
     }
 
     fun refreshTree(preserveExpansion: Boolean = true) {
-        val root = workspaceRoot ?: return
+        val root = session.workspaceRoot ?: return
         val newTree = store.loadTree(root) ?: return
-        if (!preserveExpansion || tree == null) {
-            tree = newTree
+        if (!preserveExpansion || session.tree == null) {
+            session.tree = newTree
             return
         }
         val expandedUris = mutableSetOf<String>()
@@ -92,22 +91,22 @@ fun EditorScreen(onSwipeToAi: () -> Unit) {
             if (n.isExpanded) expandedUris.add(n.uri)
             n.children.forEach { collectExpanded(it) }
         }
-        tree?.let { collectExpanded(it) }
+        session.tree?.let { collectExpanded(it) }
         fun applyExpansion(n: WorkspaceNode): WorkspaceNode {
             val expanded = expandedUris.contains(n.uri)
             return n.copy(isExpanded = expanded, children = n.children.map { applyExpansion(it) })
         }
-        tree = applyExpansion(newTree)
+        session.tree = applyExpansion(newTree)
     }
 
     fun setWorkspaceRoot(uri: String) {
-        workspaceRoot = uri
-        selectedUri = null
-        openFile = null
-        unsupportedFileMessage = null
-        navHistory = NavigationHistory()
-        unsavedEdits = emptyMap()
-        tree = store.loadTree(uri)?.copy(isExpanded = true)
+        session.workspaceRoot = uri
+        session.selectedUri = null
+        session.openFile = null
+        session.unsupportedFileMessage = null
+        session.navHistory = NavigationHistory()
+        session.unsavedEdits = emptyMap()
+        session.tree = store.loadTree(uri)?.copy(isExpanded = true)
     }
 
     fun openFileAt(uri: String, addToHistory: Boolean = true) {
@@ -117,39 +116,35 @@ fun EditorScreen(onSwipeToAi: () -> Unit) {
             for (c in n.children) findName(c)?.let { return it }
             return null
         }
-        val name = findName(tree) ?: uri.substringAfterLast('/')
+        val name = findName(session.tree) ?: uri.substringAfterLast('/')
 
-        // Refuse to load binary content into the text editor (spec:
-        // this must never crash on non-text files -- it should
-        // decline gracefully instead). Detection is byte-content
-        // based, not extension based, per section 30.
-        if (!unsavedEdits.containsKey(uri) && store.isLikelyBinary(uri)) {
-            unsupportedFileMessage = "\"$name\" doesn't look like a text file and can't be opened here."
-            openFile = null
-            selectedUri = uri
+        if (!session.unsavedEdits.containsKey(uri) && store.isLikelyBinary(uri)) {
+            session.unsupportedFileMessage = "\"$name\" doesn't look like a text file and can't be opened here."
+            session.openFile = null
+            session.selectedUri = uri
             explorerOpen = false
             return
         }
 
-        val content = unsavedEdits[uri] ?: store.readFile(uri)
-        unsupportedFileMessage = null
-        openFile = OpenFile(uri, name, content, isDirty = unsavedEdits.containsKey(uri))
-        selectedUri = uri
+        val content = session.unsavedEdits[uri] ?: store.readFile(uri)
+        session.unsupportedFileMessage = null
+        session.openFile = OpenFile(uri, name, content, isDirty = session.unsavedEdits.containsKey(uri))
+        session.selectedUri = uri
         explorerOpen = false
-        if (addToHistory) navHistory = navHistory.navigateTo(uri)
+        if (addToHistory) session.navHistory = session.navHistory.navigateTo(uri)
     }
 
     fun toggleExpand(uri: String) {
-        tree = tree?.let { updateNode(it, uri, { n -> n.copy(isExpanded = !n.isExpanded) }) }
+        session.tree = session.tree?.let { updateNode(it, uri, { n -> n.copy(isExpanded = !n.isExpanded) }) }
     }
 
     fun expandUri(uri: String) {
-        tree = tree?.let { updateNode(it, uri, { n -> n.copy(isExpanded = true) }) }
+        session.tree = session.tree?.let { updateNode(it, uri, { n -> n.copy(isExpanded = true) }) }
     }
 
     fun selectNode(node: WorkspaceNode) {
         if (node.isDirectory) {
-            selectedUri = node.uri
+            session.selectedUri = node.uri
             toggleExpand(node.uri)
         } else {
             openFileAt(node.uri)
@@ -157,16 +152,16 @@ fun EditorScreen(onSwipeToAi: () -> Unit) {
     }
 
     fun resolveCreationParent(): String {
-        val sel = selectedUri
-        if (sel == null) return workspaceRoot ?: ""
+        val sel = session.selectedUri
+        if (sel == null) return session.workspaceRoot ?: ""
         fun findNode(n: WorkspaceNode?): WorkspaceNode? {
             if (n == null) return null
             if (n.uri == sel) return n
             for (c in n.children) findNode(c)?.let { return it }
             return null
         }
-        val node = findNode(tree) ?: return workspaceRoot ?: ""
-        return if (node.isDirectory) node.uri else (node.parentUri ?: workspaceRoot ?: "")
+        val node = findNode(session.tree) ?: return session.workspaceRoot ?: ""
+        return if (node.isDirectory) node.uri else (node.parentUri ?: session.workspaceRoot ?: "")
     }
 
     fun beginCreate(isDirectory: Boolean) {
@@ -208,7 +203,7 @@ fun EditorScreen(onSwipeToAi: () -> Unit) {
             is WorkspaceStore.CreateResult.Success -> {
                 inlineEdit = null
                 refreshTree()
-                selectedUri = result.uri
+                session.selectedUri = result.uri
             }
             WorkspaceStore.CreateResult.DuplicateName -> {
                 inlineEdit = edit.copy(error = CreationErrorState.DUPLICATE_NAME)
@@ -220,38 +215,37 @@ fun EditorScreen(onSwipeToAi: () -> Unit) {
     }
 
     fun onContentChange(newContent: String) {
-        val current = openFile ?: return
-        openFile = current.copy(content = newContent, isDirty = true)
-        unsavedEdits = unsavedEdits + (current.uri to newContent)
-        if (autoSave) {
+        val current = session.openFile ?: return
+        session.openFile = current.copy(content = newContent, isDirty = true)
+        session.unsavedEdits = session.unsavedEdits + (current.uri to newContent)
+        if (session.autoSave) {
             store.writeFile(current.uri, newContent)
-            unsavedEdits = unsavedEdits - current.uri
-            openFile = openFile?.copy(isDirty = false)
+            session.unsavedEdits = session.unsavedEdits - current.uri
+            session.openFile = session.openFile?.copy(isDirty = false)
         }
     }
 
     fun saveCurrent() {
-        val current = openFile ?: return
+        val current = session.openFile ?: return
         store.writeFile(current.uri, current.content)
-        unsavedEdits = unsavedEdits - current.uri
-        openFile = current.copy(isDirty = false)
+        session.unsavedEdits = session.unsavedEdits - current.uri
+        session.openFile = current.copy(isDirty = false)
     }
 
     fun saveAll() {
-        unsavedEdits.forEach { (uri, content) -> store.writeFile(uri, content) }
-        unsavedEdits = emptyMap()
-        openFile = openFile?.copy(isDirty = false)
+        session.unsavedEdits.forEach { (uri, content) -> store.writeFile(uri, content) }
+        session.unsavedEdits = emptyMap()
+        session.openFile = session.openFile?.copy(isDirty = false)
     }
 
     fun startNewWorkspace(createFileNotFolder: Boolean) {
-        val base = workspaceRoot
-        val parentForNewRoot = base ?: return
+        val parentForNewRoot = session.workspaceRoot ?: return
         val uniqueName = store.uniqueWorkspaceFolderName(parentForNewRoot)
         val result = store.createFolder(parentForNewRoot, uniqueName)
         if (result is WorkspaceStore.CreateResult.Success) {
             setWorkspaceRoot(parentForNewRoot)
-            tree = store.loadTree(parentForNewRoot)?.copy(isExpanded = true)
-            selectedUri = result.uri
+            session.tree = store.loadTree(parentForNewRoot)?.copy(isExpanded = true)
+            session.selectedUri = result.uri
             explorerOpen = true
             beginCreate(isDirectory = !createFileNotFolder)
         }
@@ -299,50 +293,53 @@ fun EditorScreen(onSwipeToAi: () -> Unit) {
         Row(modifier = Modifier.fillMaxSize()) {
             EditorRail(
                 onMenuClick = { menuOpen = true },
-                onExplorerClick = { if (workspaceRoot != null) explorerOpen = true }
+                onExplorerClick = { if (session.workspaceRoot != null) explorerOpen = true }
             )
 
             Column(modifier = Modifier.fillMaxSize().weight(1f)) {
                 Box(modifier = Modifier.statusBarsPadding())
 
                 EditorTopBar(
-                    canGoBack = navHistory.canGoBack,
-                    canGoForward = navHistory.canGoForward,
+                    canGoBack = session.navHistory.canGoBack,
+                    canGoForward = session.navHistory.canGoForward,
                     onBack = {
-                        navHistory = navHistory.goBack()
-                        navHistory.current?.let { openFileAt(it, addToHistory = false) }
+                        session.navHistory = session.navHistory.goBack()
+                        session.navHistory.current?.let { openFileAt(it, addToHistory = false) }
                     },
                     onForward = {
-                        navHistory = navHistory.goForward()
-                        navHistory.current?.let { openFileAt(it, addToHistory = false) }
+                        session.navHistory = session.navHistory.goForward()
+                        session.navHistory.current?.let { openFileAt(it, addToHistory = false) }
                     },
-                    tree = tree,
-                    openFileContent = openFile?.content,
+                    tree = session.tree,
+                    openFileContent = session.openFile?.content,
+                    currentFileName = session.openFile?.name,
                     searchMode = searchMode,
                     onSearchModeChange = { searchMode = it },
                     onSelectFileResult = { openFileAt(it) },
-                    onSelectTextResult = { }
+                    onSelectTextResult = { result -> highlightRequest = result }
                 )
 
                 when {
-                    workspaceRoot == null -> EditorStartScreen(
+                    session.workspaceRoot == null -> EditorStartScreen(
                         onNewFile = { openFolderLauncher.launch(null) },
                         onOpenFile = { openFileLauncher.launch(arrayOf("text/*")) },
                         onOpenFolder = { openFolderLauncher.launch(null) }
                     )
-                    unsupportedFileMessage != null -> UnsupportedFileScreen(unsupportedFileMessage!!)
+                    session.unsupportedFileMessage != null -> UnsupportedFileScreen(session.unsupportedFileMessage!!)
                     else -> TextEditorView(
-                        openFile = openFile,
-                        onContentChange = { onContentChange(it) }
+                        openFile = session.openFile,
+                        onContentChange = { onContentChange(it) },
+                        highlightRequest = highlightRequest,
+                        onHighlightConsumed = { highlightRequest = null }
                     )
                 }
             }
         }
 
         ExplorerSidebar(
-            visible = explorerOpen && tree != null,
-            tree = tree,
-            selectedUri = selectedUri,
+            visible = explorerOpen && session.tree != null,
+            tree = session.tree,
+            selectedUri = session.selectedUri,
             onToggleExpand = { toggleExpand(it) },
             onSelectNode = { selectNode(it) },
             onCreateFile = { beginCreate(isDirectory = false) },
@@ -356,8 +353,8 @@ fun EditorScreen(onSwipeToAi: () -> Unit) {
 
         EditorMenu(
             visible = menuOpen,
-            autoSave = autoSave,
-            onAutoSaveToggle = { autoSave = it },
+            autoSave = session.autoSave,
+            onAutoSaveToggle = { session.autoSave = it },
             onNewFile = { menuOpen = false; startNewWorkspace(createFileNotFolder = true) },
             onNewFolder = { menuOpen = false; startNewWorkspace(createFileNotFolder = false) },
             onOpenFile = { menuOpen = false; openFileLauncher.launch(arrayOf("text/*")) },
