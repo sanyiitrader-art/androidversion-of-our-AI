@@ -5,8 +5,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -17,19 +17,19 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.ui.unit.dp
 import com.fsstructurecreator.ui.CharcoalInput
 import com.fsstructurecreator.ui.Mint
+import com.fsstructurecreator.ui.MintSoft
 import com.fsstructurecreator.ui.TextPrimary
 import com.fsstructurecreator.ui.TextSecondary
 import com.fsstructurecreator.ui.TextTertiary
@@ -57,10 +57,6 @@ fun EditorTopBar(
         node.children.forEach { flattenFiles(it, acc) }
     }
 
-    // Prefix match, not "contains" -- matches the requested behavior:
-    // typing "w" then "o" then "r" then "d" narrows progressively as
-    // each new character is added, the same way VS Code's quick-open
-    // narrows on the start of the name.
     val fileResults: List<FileSearchResult> = if (searchMode == WorkspaceSearchMode.FILE_NAME && query.isNotBlank()) {
         val all = mutableListOf<WorkspaceNode>()
         flattenFiles(tree, all)
@@ -90,11 +86,6 @@ fun EditorTopBar(
                 Icon(Icons.Filled.ArrowForward, contentDescription = "Forward", tint = if (canGoForward) TextPrimary else TextTertiary)
             }
 
-            // No manual .clickable{} wrapper here on purpose -- one was
-            // previously stealing the tap before the field itself could
-            // gain real focus, which is why neither typing nor the
-            // "Search Text" button worked. OutlinedTextField already
-            // handles its own focus/tap correctly on its own.
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
@@ -123,10 +114,25 @@ fun EditorTopBar(
         }
 
         if (focused && query.isBlank()) {
-            TextButton(onClick = {
-                onSearchModeChange(WorkspaceSearchMode.TEXT_IN_FILE)
-            }) {
-                Text("Search Text", color = Mint)
+            Row(
+                modifier = Modifier
+                    .padding(top = 4.dp)
+                    .clickable {
+                        onSearchModeChange(
+                            if (searchMode == WorkspaceSearchMode.TEXT_IN_FILE) WorkspaceSearchMode.FILE_NAME
+                            else WorkspaceSearchMode.TEXT_IN_FILE
+                        )
+                    }
+                    .background(
+                        if (searchMode == WorkspaceSearchMode.TEXT_IN_FILE) MintSoft else androidx.compose.ui.graphics.Color.Transparent,
+                        RoundedCornerShape(6.dp)
+                    )
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    "Search Text",
+                    color = if (searchMode == WorkspaceSearchMode.TEXT_IN_FILE) Mint else TextSecondary
+                )
             }
         }
 
@@ -135,7 +141,12 @@ fun EditorTopBar(
                 if (fileResults.isEmpty()) {
                     Text("No Result Found", color = TextSecondary, modifier = Modifier.padding(top = 6.dp))
                 } else {
-                    LazyColumn(modifier = Modifier.padding(top = 6.dp).size(height = 120.dp, width = 0.dp).fillMaxWidth()) {
+                    LazyColumn(
+                        modifier = Modifier
+                            .padding(top = 6.dp)
+                            .fillMaxWidth()
+                            .height(120.dp)
+                    ) {
                         items(fileResults) { result ->
                             Text(
                                 text = result.name,
@@ -156,7 +167,12 @@ fun EditorTopBar(
                 if (textResults.isEmpty()) {
                     Text("No Result Found", color = TextSecondary, modifier = Modifier.padding(top = 6.dp))
                 } else {
-                    LazyColumn(modifier = Modifier.padding(top = 6.dp).size(height = 120.dp, width = 0.dp).fillMaxWidth()) {
+                    LazyColumn(
+                        modifier = Modifier
+                            .padding(top = 6.dp)
+                            .fillMaxWidth()
+                            .height(120.dp)
+                    ) {
                         items(textResults) { result ->
                             Text(
                                 text = "L${result.lineNumber}: ${result.lineText.trim()}",
