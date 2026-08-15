@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FileOpen
@@ -354,9 +353,6 @@ fun EditorScreen(onSwipeToAi: () -> Unit) {
     }
 }
 
-/** Persistent left icon rail: menu (hamburger) and Explorer toggle at
- *  the top, Settings pinned to the bottom -- matches the reference
- *  image exactly. Settings is intentionally inert (spec section 42). */
 @Composable
 private fun EditorRail(
     onMenuClick: () -> Unit,
@@ -384,10 +380,6 @@ private fun EditorRail(
     }
 }
 
-/** Matches the reference image: "Start" section with New File / Open
- *  File / Open Folder actions, and a "Recent" section that always
- *  shows the empty state since recent history is never persisted
- *  (spec section 4). */
 @Composable
 private fun EditorStartScreen(
     onNewFile: () -> Unit,
