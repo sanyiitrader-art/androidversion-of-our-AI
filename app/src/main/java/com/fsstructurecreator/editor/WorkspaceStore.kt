@@ -61,27 +61,31 @@ class WorkspaceStore(private val context: Context) {
         }
     }
 
-    fun createFile(parentUri: String, name: String): CreateResult = try {
-        val parent = DocumentFile.fromTreeUri(context, Uri.parse(parentUri)) ?: return CreateResult.Failure
-        if (parent.findFile(name) != null) return CreateResult.DuplicateName
+    fun createFile(parentUri: String, name: String): CreateResult {
+        return try {
+            val parent = DocumentFile.fromTreeUri(context, Uri.parse(parentUri)) ?: return CreateResult.Failure
+            if (parent.findFile(name) != null) return CreateResult.DuplicateName
 
-        val created = parent.createFile("application/octet-stream", name) ?: return CreateResult.Failure
-        if (created.name != name) {
-            created.renameTo(name)
+            val created = parent.createFile("application/octet-stream", name) ?: return CreateResult.Failure
+            if (created.name != name) {
+                created.renameTo(name)
+            }
+            CreateResult.Success(created.uri.toString())
+        } catch (e: Exception) {
+            CreateResult.Failure
         }
-        CreateResult.Success(created.uri.toString())
-    } catch (e: Exception) {
-        CreateResult.Failure
     }
 
-    fun createFolder(parentUri: String, name: String): CreateResult = try {
-        val parent = DocumentFile.fromTreeUri(context, Uri.parse(parentUri)) ?: return CreateResult.Failure
-        if (parent.findFile(name) != null) return CreateResult.DuplicateName
+    fun createFolder(parentUri: String, name: String): CreateResult {
+        return try {
+            val parent = DocumentFile.fromTreeUri(context, Uri.parse(parentUri)) ?: return CreateResult.Failure
+            if (parent.findFile(name) != null) return CreateResult.DuplicateName
 
-        val created = parent.createDirectory(name) ?: return CreateResult.Failure
-        CreateResult.Success(created.uri.toString())
-    } catch (e: Exception) {
-        CreateResult.Failure
+            val created = parent.createDirectory(name) ?: return CreateResult.Failure
+            CreateResult.Success(created.uri.toString())
+        } catch (e: Exception) {
+            CreateResult.Failure
+        }
     }
 
     /** Renames a file or folder. Wrapped defensively: Android's
@@ -89,19 +93,23 @@ class WorkspaceStore(private val context: Context) {
      *  invalid target names, fail this way rather than just returning
      *  false) -- an uncaught throw here previously crashed the whole
      *  app instead of surfacing as a normal "couldn't rename" result. */
-    fun rename(uri: String, newName: String): Boolean = try {
-        val doc = DocumentFile.fromSingleUri(context, Uri.parse(uri))
-        doc?.renameTo(newName) ?: false
-    } catch (e: Exception) {
-        false
+    fun rename(uri: String, newName: String): Boolean {
+        return try {
+            val doc = DocumentFile.fromSingleUri(context, Uri.parse(uri))
+            doc?.renameTo(newName) ?: false
+        } catch (e: Exception) {
+            false
+        }
     }
 
-    fun delete(uri: String): Boolean = try {
-        val doc = DocumentFile.fromSingleUri(context, Uri.parse(uri))
-            ?: DocumentFile.fromTreeUri(context, Uri.parse(uri))
-        doc?.delete() ?: false
-    } catch (e: Exception) {
-        false
+    fun delete(uri: String): Boolean {
+        return try {
+            val doc = DocumentFile.fromSingleUri(context, Uri.parse(uri))
+                ?: DocumentFile.fromTreeUri(context, Uri.parse(uri))
+            doc?.delete() ?: false
+        } catch (e: Exception) {
+            false
+        }
     }
 
     fun uniqueWorkspaceFolderName(parentUri: String, baseName: String = "new folder"): String {
