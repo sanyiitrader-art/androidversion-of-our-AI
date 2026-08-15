@@ -31,12 +31,6 @@ class WorkspaceStore(private val context: Context) {
         )
     }
 
-    /** Sniffs the first few KB of a file's actual bytes to decide
-     *  whether it's safe to load as text. Deliberately NOT based on
-     *  file extension (spec section 30 -- no hardcoded file-type
-     *  list): a null byte, or a high proportion of non-printable
-     *  control bytes, reliably indicates binary content regardless of
-     *  what the file is named. */
     fun isLikelyBinary(uri: String): Boolean {
         val inputStream = context.contentResolver.openInputStream(Uri.parse(uri)) ?: return true
         return inputStream.use { stream ->
@@ -47,7 +41,7 @@ class WorkspaceStore(private val context: Context) {
             var suspiciousCount = 0
             for (i in 0 until bytesRead) {
                 val b = buffer[i].toInt() and 0xFF
-                if (b == 0) return@use true // null byte -- definitively binary
+                if (b == 0) return@use true
                 val isPrintableOrWhitespace =
                     b in 0x20..0x7E || b == 0x09 || b == 0x0A || b == 0x0D || b >= 0x80
                 if (!isPrintableOrWhitespace) suspiciousCount++
@@ -89,6 +83,16 @@ class WorkspaceStore(private val context: Context) {
     fun rename(uri: String, newName: String): Boolean {
         val doc = DocumentFile.fromSingleUri(context, Uri.parse(uri)) ?: return false
         return doc.renameTo(newName)
+    }
+
+    /** Deletes a file, or a folder and everything inside it (SAF's
+     *  DocumentFile.delete() already handles recursive folder deletion
+     *  on its own). Returns whether it succeeded. */
+    fun delete(uri: String): Boolean {
+        val doc = DocumentFile.fromSingleUri(context, Uri.parse(uri))
+            ?: DocumentFile.fromTreeUri(context, Uri.parse(uri))
+            ?: return false
+        return doc.delete()
     }
 
     fun uniqueWorkspaceFolderName(parentUri: String, baseName: String = "new folder"): String {

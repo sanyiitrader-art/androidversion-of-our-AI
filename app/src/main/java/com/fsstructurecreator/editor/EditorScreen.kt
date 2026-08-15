@@ -64,9 +64,6 @@ fun EditorScreen(
     val scope = rememberCoroutineScope()
     val store = remember { WorkspaceStore(context) }
 
-    // Transient UI-only state (fine to reset on navigation) stays
-    // local. Anything about "what workspace/file am I in" lives in
-    // `session` instead, so it survives switching to the AI screen.
     var explorerOpen by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     var inlineEdit by remember { mutableStateOf<InlineEditState?>(null) }
@@ -214,6 +211,34 @@ fun EditorScreen(
         }
     }
 
+    /** Checks whether targetUri is deletedUri itself or lives anywhere
+     *  underneath it -- used so deleting a folder correctly clears the
+     *  open file / unsaved edits for anything that was inside it. */
+    fun isUnderOrEqual(targetUri: String, deletedNode: WorkspaceNode): Boolean {
+        if (targetUri == deletedNode.uri) return true
+        fun search(n: WorkspaceNode): Boolean {
+            if (n.uri == targetUri) return true
+            return n.children.any { search(it) }
+        }
+        return deletedNode.children.any { search(it) }
+    }
+
+    fun deleteNode(node: WorkspaceNode) {
+        val ok = store.delete(node.uri)
+        if (!ok) return
+
+        val openUri = session.openFile?.uri
+        if (openUri != null && isUnderOrEqual(openUri, node)) {
+            session.openFile = null
+            session.unsupportedFileMessage = null
+        }
+        session.unsavedEdits = session.unsavedEdits.filterKeys { !isUnderOrEqual(it, node) }
+        if (session.selectedUri != null && isUnderOrEqual(session.selectedUri!!, node)) {
+            session.selectedUri = node.parentUri
+        }
+        refreshTree()
+    }
+
     fun onContentChange(newContent: String) {
         val current = session.openFile ?: return
         session.openFile = current.copy(content = newContent, isDirty = true)
@@ -345,6 +370,7 @@ fun EditorScreen(
             onCreateFile = { beginCreate(isDirectory = false) },
             onCreateFolder = { beginCreate(isDirectory = true) },
             onRenameRequest = { beginRename(it) },
+            onDeleteRequest = { deleteNode(it) },
             inlineEdit = inlineEdit,
             onSubmitInlineEdit = { submitInlineEdit(it) },
             onCancelInlineEdit = { inlineEdit = null },

@@ -26,6 +26,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Folder
@@ -33,12 +35,14 @@ import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.NoteAdd
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -52,6 +56,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import com.fsstructurecreator.ui.CharcoalElevated
@@ -75,11 +80,14 @@ fun ExplorerSidebar(
     onCreateFile: () -> Unit,
     onCreateFolder: () -> Unit,
     onRenameRequest: (WorkspaceNode) -> Unit,
+    onDeleteRequest: (WorkspaceNode) -> Unit,
     inlineEdit: InlineEditState?,
     onSubmitInlineEdit: (String) -> Unit,
     onCancelInlineEdit: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    var pendingDeleteNode by remember { mutableStateOf<WorkspaceNode?>(null) }
+
     AnimatedVisibility(
         visible = visible,
         enter = slideInHorizontally(initialOffsetX = { -it }),
@@ -119,7 +127,8 @@ fun ExplorerSidebar(
                                 isSelected = node.uri == selectedUri,
                                 onClick = { onSelectNode(node) },
                                 onLongPressRename = { onRenameRequest(node) },
-                                onLongPressNewFile = { if (node.isDirectory) { onSelectNode(node); onCreateFile() } }
+                                onLongPressNewFile = { if (node.isDirectory) { onSelectNode(node); onCreateFile() } },
+                                onLongPressDelete = { pendingDeleteNode = node }
                             )
                             if (inlineEdit != null && !inlineEdit.isRename && inlineEdit.parentUri == node.uri) {
                                 InlineNameField(
@@ -129,10 +138,6 @@ fun ExplorerSidebar(
                                     onSubmit = onSubmitInlineEdit,
                                     onCancel = onCancelInlineEdit
                                 )
-                            }
-                            if (inlineEdit != null && inlineEdit.isRename && inlineEdit.existingUri == node.uri) {
-                                // Rename shown in place of the row's label -- simplified
-                                // here as an inline field beneath it for clarity.
                             }
                         }
                     }
@@ -169,6 +174,35 @@ fun ExplorerSidebar(
             )
         }
     }
+
+    val deleteNode = pendingDeleteNode
+    if (deleteNode != null) {
+        AlertDialog(
+            onDismissRequest = { pendingDeleteNode = null },
+            containerColor = CharcoalElevated,
+            title = { Text("Delete \"${deleteNode.name}\"?", color = TextPrimary) },
+            text = {
+                Text(
+                    if (deleteNode.isDirectory) "This folder and everything inside it will be deleted. This can't be undone."
+                    else "This can't be undone.",
+                    color = TextSecondary
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDeleteRequest(deleteNode)
+                    pendingDeleteNode = null
+                }) {
+                    Text("Delete", color = DangerColor)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteNode = null }) {
+                    Text("Cancel", color = TextSecondary)
+                }
+            }
+        )
+    }
 }
 
 private fun flattenVisible(node: WorkspaceNode): List<WorkspaceNode> {
@@ -190,7 +224,8 @@ private fun ExplorerRow(
     isSelected: Boolean,
     onClick: () -> Unit,
     onLongPressRename: () -> Unit,
-    onLongPressNewFile: () -> Unit
+    onLongPressNewFile: () -> Unit,
+    onLongPressDelete: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
 
@@ -234,6 +269,10 @@ private fun ExplorerRow(
                 text = { Text("Rename", color = TextPrimary) },
                 onClick = { showMenu = false; onLongPressRename() }
             )
+            DropdownMenuItem(
+                text = { Text("Delete", color = DangerColor) },
+                onClick = { showMenu = false; onLongPressDelete() }
+            )
         }
     }
 }
@@ -276,10 +315,17 @@ private fun InlineNameField(
 
     val borderColor = if (error == CreationErrorState.DUPLICATE_NAME) DangerColor else Mint
 
+    fun submit() {
+        val trimmed = fieldValue.text.trim()
+        if (trimmed.isNotEmpty()) onSubmit(trimmed)
+    }
+
     OutlinedTextField(
         value = fieldValue,
         onValueChange = { fieldValue = it },
         singleLine = true,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+        keyboardActions = KeyboardActions(onDone = { submit() }),
         colors = TextFieldDefaults.colors(
             focusedContainerColor = CharcoalInput,
             unfocusedContainerColor = CharcoalInput,

@@ -48,4 +48,8 @@ class ConversationStore(context: Context) {
         val file = File(dir, "${conversation.id}.json")
         file.writeText(json.encodeToString(conversation))
     }
+
+    fun deleteConversation(id: String) {
+        File(dir, "$id.json").delete()
+    }
 }
