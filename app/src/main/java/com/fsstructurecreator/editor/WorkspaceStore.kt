@@ -61,7 +61,7 @@ class WorkspaceStore(private val context: Context) {
         }
     }
 
-    fun createFile(parentUri: String, name: String): CreateResult {
+    fun createFile(parentUri: String, name: String): CreateResult = try {
         val parent = DocumentFile.fromTreeUri(context, Uri.parse(parentUri)) ?: return CreateResult.Failure
         if (parent.findFile(name) != null) return CreateResult.DuplicateName
 
@@ -69,30 +69,39 @@ class WorkspaceStore(private val context: Context) {
         if (created.name != name) {
             created.renameTo(name)
         }
-        return CreateResult.Success(created.uri.toString())
+        CreateResult.Success(created.uri.toString())
+    } catch (e: Exception) {
+        CreateResult.Failure
     }
 
-    fun createFolder(parentUri: String, name: String): CreateResult {
+    fun createFolder(parentUri: String, name: String): CreateResult = try {
         val parent = DocumentFile.fromTreeUri(context, Uri.parse(parentUri)) ?: return CreateResult.Failure
         if (parent.findFile(name) != null) return CreateResult.DuplicateName
 
         val created = parent.createDirectory(name) ?: return CreateResult.Failure
-        return CreateResult.Success(created.uri.toString())
+        CreateResult.Success(created.uri.toString())
+    } catch (e: Exception) {
+        CreateResult.Failure
     }
 
-    fun rename(uri: String, newName: String): Boolean {
-        val doc = DocumentFile.fromSingleUri(context, Uri.parse(uri)) ?: return false
-        return doc.renameTo(newName)
+    /** Renames a file or folder. Wrapped defensively: Android's
+     *  DocumentFile.renameTo() can throw (some storage providers, or
+     *  invalid target names, fail this way rather than just returning
+     *  false) -- an uncaught throw here previously crashed the whole
+     *  app instead of surfacing as a normal "couldn't rename" result. */
+    fun rename(uri: String, newName: String): Boolean = try {
+        val doc = DocumentFile.fromSingleUri(context, Uri.parse(uri))
+        doc?.renameTo(newName) ?: false
+    } catch (e: Exception) {
+        false
     }
 
-    /** Deletes a file, or a folder and everything inside it (SAF's
-     *  DocumentFile.delete() already handles recursive folder deletion
-     *  on its own). Returns whether it succeeded. */
-    fun delete(uri: String): Boolean {
+    fun delete(uri: String): Boolean = try {
         val doc = DocumentFile.fromSingleUri(context, Uri.parse(uri))
             ?: DocumentFile.fromTreeUri(context, Uri.parse(uri))
-            ?: return false
-        return doc.delete()
+        doc?.delete() ?: false
+    } catch (e: Exception) {
+        false
     }
 
     fun uniqueWorkspaceFolderName(parentUri: String, baseName: String = "new folder"): String {

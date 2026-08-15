@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -87,6 +88,7 @@ fun ExplorerSidebar(
     onDismiss: () -> Unit
 ) {
     var pendingDeleteNode by remember { mutableStateOf<WorkspaceNode?>(null) }
+    val listState = rememberLazyListState()
 
     AnimatedVisibility(
         visible = visible,
@@ -114,49 +116,62 @@ fun ExplorerSidebar(
                     }
                 }
 
-                val scrollState = rememberScrollState()
+                val visibleNodes = tree?.let { flattenVisible(it) } ?: emptyList()
+                val horizontalScrollState = rememberScrollState()
+
+                // Whenever a rename begins, scroll the Explorer list so the
+                // item actually being renamed is guaranteed on-screen --
+                // otherwise the inline field can render correctly but sit
+                // just below the visible viewport (only its top edge showing).
+                LaunchedEffect(inlineEdit) {
+                    val edit = inlineEdit
+                    if (edit != null && edit.isRename) {
+                        val index = visibleNodes.indexOfFirst { it.uri == edit.existingUri }
+                        if (index >= 0) {
+                            horizontalScrollState.animateScrollTo(0)
+                            listState.animateScrollToItem(index)
+                        }
+                    }
+                }
+
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier
                         .fillMaxSize()
-                        .horizontalScroll(scrollState)
+                        .horizontalScroll(horizontalScrollState)
                 ) {
-                    tree?.let { root ->
-                        items(flattenVisible(root)) { node ->
-                            val isRenamingThisNode =
-                                inlineEdit != null && inlineEdit.isRename && inlineEdit.existingUri == node.uri
+                    items(visibleNodes, key = { it.uri }) { node ->
+                        val isRenamingThisNode =
+                            inlineEdit != null && inlineEdit.isRename && inlineEdit.existingUri == node.uri
 
-                            if (isRenamingThisNode) {
-                                // Renders IN PLACE of the row itself -- the
-                                // long-pressed item becomes the editable
-                                // field, not a separate box elsewhere.
-                                InlineNameField(
-                                    depth = node.depth,
-                                    initialText = inlineEdit!!.initialText,
-                                    error = inlineEdit.error,
-                                    selectNameOnlyForFile = !inlineEdit.isDirectory,
-                                    onSubmit = onSubmitInlineEdit,
-                                    onCancel = onCancelInlineEdit
-                                )
-                            } else {
-                                ExplorerRow(
-                                    node = node,
-                                    isSelected = node.uri == selectedUri,
-                                    onClick = { onSelectNode(node) },
-                                    onLongPressRename = { onRenameRequest(node) },
-                                    onLongPressNewFile = { if (node.isDirectory) { onSelectNode(node); onCreateFile() } },
-                                    onLongPressDelete = { pendingDeleteNode = node }
-                                )
-                            }
+                        if (isRenamingThisNode) {
+                            InlineNameField(
+                                depth = node.depth,
+                                initialText = inlineEdit!!.initialText,
+                                error = inlineEdit.error,
+                                selectNameOnlyForFile = !inlineEdit.isDirectory,
+                                onSubmit = onSubmitInlineEdit,
+                                onCancel = onCancelInlineEdit
+                            )
+                        } else {
+                            ExplorerRow(
+                                node = node,
+                                isSelected = node.uri == selectedUri,
+                                onClick = { onSelectNode(node) },
+                                onLongPressRename = { onRenameRequest(node) },
+                                onLongPressNewFile = { if (node.isDirectory) { onSelectNode(node); onCreateFile() } },
+                                onLongPressDelete = { pendingDeleteNode = node }
+                            )
+                        }
 
-                            if (inlineEdit != null && !inlineEdit.isRename && inlineEdit.parentUri == node.uri) {
-                                InlineNameField(
-                                    depth = node.depth + 1,
-                                    initialText = "",
-                                    error = inlineEdit.error,
-                                    onSubmit = onSubmitInlineEdit,
-                                    onCancel = onCancelInlineEdit
-                                )
-                            }
+                        if (inlineEdit != null && !inlineEdit.isRename && inlineEdit.parentUri == node.uri) {
+                            InlineNameField(
+                                depth = node.depth + 1,
+                                initialText = "",
+                                error = inlineEdit.error,
+                                onSubmit = onSubmitInlineEdit,
+                                onCancel = onCancelInlineEdit
+                            )
                         }
                     }
                 }
@@ -308,7 +323,10 @@ private fun InlineNameField(
     val focusRequester = remember { FocusRequester() }
     val shakeOffset = remember { Animatable(0f) }
 
-    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+    LaunchedEffect(Unit) {
+        delay(150) // let the list-scroll-into-view settle before grabbing focus
+        focusRequester.requestFocus()
+    }
 
     LaunchedEffect(error) {
         if (error == CreationErrorState.DUPLICATE_NAME) {

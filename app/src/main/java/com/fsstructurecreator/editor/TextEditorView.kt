@@ -6,6 +6,7 @@ import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.onSizeChanged
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
@@ -27,6 +28,7 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -61,14 +63,18 @@ fun TextEditorView(
     val scope = rememberCoroutineScope()
     val interactionSource = remember { MutableInteractionSource() }
 
+    // TextFieldValue (not just String) so we can read the caret
+    // position for scroll-to-cursor tracking. Re-synced whenever the
+    // open file changes so switching files doesn't carry over a stale
+    // selection from the previous one.
+    var fieldValue by remember(openFile.uri) {
+        mutableStateOf(TextFieldValue(openFile.content))
+    }
+
     var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    var viewportHeight by remember { mutableStateOf(0) }
     var activeHighlightRange by remember(openFile.uri) { mutableStateOf<IntRange?>(null) }
 
-    // Clears the search highlight the moment the user taps into the
-    // editor to reposition their cursor -- a tap is reported as a
-    // PressInteraction regardless of where in the field it lands, so
-    // this doesn't interfere with the field's own selection/caret
-    // gestures, it just also clears the highlight alongside them.
     LaunchedEffect(interactionSource, openFile.uri) {
         interactionSource.interactions.collect { interaction ->
             if (interaction is PressInteraction.Press) {
@@ -81,9 +87,9 @@ fun TextEditorView(
         val request = highlightRequest ?: return@LaunchedEffect
         val layout = textLayout ?: return@LaunchedEffect
 
-        val start = absoluteOffset(openFile.content, request.lineNumber, request.matchStart)
-        val end = absoluteOffset(openFile.content, request.lineNumber, request.matchEnd)
-        if (start >= end || end > openFile.content.length) {
+        val start = absoluteOffset(fieldValue.text, request.lineNumber, request.matchStart)
+        val end = absoluteOffset(fieldValue.text, request.lineNumber, request.matchEnd)
+        if (start >= end || end > fieldValue.text.length) {
             onHighlightConsumed()
             return@LaunchedEffect
         }
@@ -99,7 +105,36 @@ fun TextEditorView(
         onHighlightConsumed()
     }
 
-    val visualTransformation = remember(extension, activeHighlightRange, openFile.content) {
+    // Follows the text cursor: whenever the caret moves (typing, arrow
+    // keys, tapping) or the visible viewport height changes (keyboard
+    // opening/closing), scrolls just enough to keep the caret's line
+    // inside the visible window -- not just "above the keyboard" in
+    // general, but actually tracking where you're typing.
+    LaunchedEffect(fieldValue.selection, textLayout, viewportHeight) {
+        val layout = textLayout ?: return@LaunchedEffect
+        if (viewportHeight <= 0) return@LaunchedEffect
+
+        val cursorOffset = fieldValue.selection.end.coerceIn(0, fieldValue.text.length)
+        val lineIndex = layout.getLineForOffset(cursorOffset)
+        val lineTop = layout.getLineTop(lineIndex)
+        val lineBottom = layout.getLineBottom(lineIndex)
+
+        val visibleTop = scrollState.value
+        val visibleBottom = visibleTop + viewportHeight
+        val margin = 24f
+
+        val target = when {
+            lineBottom + margin > visibleBottom -> (lineBottom + margin - viewportHeight).toInt()
+            lineTop - margin < visibleTop -> (lineTop - margin).toInt()
+            else -> null
+        }
+
+        if (target != null) {
+            scrollState.animateScrollTo(target.coerceIn(0, scrollState.maxValue))
+        }
+    }
+
+    val visualTransformation = remember(extension, activeHighlightRange, fieldValue.text) {
         VisualTransformation { annotatedString ->
             val base = if (isHighlightableExtension(extension)) {
                 highlightSyntax(annotatedString.text, extension)
@@ -119,8 +154,12 @@ fun TextEditorView(
     }
 
     BasicTextField(
-        value = openFile.content,
-        onValueChange = onContentChange,
+        value = fieldValue,
+        onValueChange = { newValue ->
+            val textChanged = newValue.text != fieldValue.text
+            fieldValue = newValue
+            if (textChanged) onContentChange(newValue.text)
+        },
         onTextLayout = { textLayout = it },
         visualTransformation = visualTransformation,
         interactionSource = interactionSource,
@@ -134,6 +173,7 @@ fun TextEditorView(
             .fillMaxSize()
             .background(CharcoalBg)
             .padding(12.dp)
+            .onSizeChanged { viewportHeight = it.height }
             .verticalScroll(scrollState)
             .imePadding()
     )
