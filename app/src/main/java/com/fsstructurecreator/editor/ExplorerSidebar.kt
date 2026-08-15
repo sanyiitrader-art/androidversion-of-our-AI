@@ -180,7 +180,6 @@ private fun flattenVisible(node: WorkspaceNode): List<WorkspaceNode> {
         }
     }
     walk(node, includeSelf = false)
-    node.children.forEach { walk(it, true) }
     return result
 }
 

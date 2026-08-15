@@ -31,6 +31,31 @@ class WorkspaceStore(private val context: Context) {
         )
     }
 
+    /** Sniffs the first few KB of a file's actual bytes to decide
+     *  whether it's safe to load as text. Deliberately NOT based on
+     *  file extension (spec section 30 -- no hardcoded file-type
+     *  list): a null byte, or a high proportion of non-printable
+     *  control bytes, reliably indicates binary content regardless of
+     *  what the file is named. */
+    fun isLikelyBinary(uri: String): Boolean {
+        val inputStream = context.contentResolver.openInputStream(Uri.parse(uri)) ?: return true
+        return inputStream.use { stream ->
+            val buffer = ByteArray(8192)
+            val bytesRead = stream.read(buffer)
+            if (bytesRead <= 0) return@use false
+
+            var suspiciousCount = 0
+            for (i in 0 until bytesRead) {
+                val b = buffer[i].toInt() and 0xFF
+                if (b == 0) return@use true // null byte -- definitively binary
+                val isPrintableOrWhitespace =
+                    b in 0x20..0x7E || b == 0x09 || b == 0x0A || b == 0x0D || b >= 0x80
+                if (!isPrintableOrWhitespace) suspiciousCount++
+            }
+            suspiciousCount.toDouble() / bytesRead > 0.10
+        }
+    }
+
     fun readFile(uri: String): String {
         val inputStream = context.contentResolver.openInputStream(Uri.parse(uri))
         return inputStream?.bufferedReader()?.use { it.readText() } ?: ""
@@ -47,8 +72,6 @@ class WorkspaceStore(private val context: Context) {
         if (parent.findFile(name) != null) return CreateResult.DuplicateName
 
         val created = parent.createFile("application/octet-stream", name) ?: return CreateResult.Failure
-        // SAF may append an extension based on MIME guessing -- rename
-        // back to the exact requested name.
         if (created.name != name) {
             created.renameTo(name)
         }
@@ -68,8 +91,6 @@ class WorkspaceStore(private val context: Context) {
         return doc.renameTo(newName)
     }
 
-    /** Finds a unique root workspace folder name starting from "new folder",
-     *  appending " (2)", " (3)", etc. as needed (spec sections 21-22). */
     fun uniqueWorkspaceFolderName(parentUri: String, baseName: String = "new folder"): String {
         val parent = DocumentFile.fromTreeUri(context, Uri.parse(parentUri)) ?: return baseName
         if (parent.findFile(baseName) == null) return baseName

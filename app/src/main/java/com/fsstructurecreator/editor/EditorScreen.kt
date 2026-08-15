@@ -72,6 +72,7 @@ fun EditorScreen(onSwipeToAi: () -> Unit) {
     var unsavedEdits by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var inlineEdit by remember { mutableStateOf<InlineEditState?>(null) }
     var searchMode by remember { mutableStateOf(WorkspaceSearchMode.FILE_NAME) }
+    var unsupportedFileMessage by remember { mutableStateOf<String?>(null) }
 
     fun updateNode(node: WorkspaceNode, targetUri: String, transform: (WorkspaceNode) -> WorkspaceNode): WorkspaceNode {
         if (node.uri == targetUri) return transform(node)
@@ -103,13 +104,13 @@ fun EditorScreen(onSwipeToAi: () -> Unit) {
         workspaceRoot = uri
         selectedUri = null
         openFile = null
+        unsupportedFileMessage = null
         navHistory = NavigationHistory()
         unsavedEdits = emptyMap()
         tree = store.loadTree(uri)?.copy(isExpanded = true)
     }
 
     fun openFileAt(uri: String, addToHistory: Boolean = true) {
-        val content = unsavedEdits[uri] ?: store.readFile(uri)
         fun findName(n: WorkspaceNode?): String? {
             if (n == null) return null
             if (n.uri == uri) return n.name
@@ -117,6 +118,21 @@ fun EditorScreen(onSwipeToAi: () -> Unit) {
             return null
         }
         val name = findName(tree) ?: uri.substringAfterLast('/')
+
+        // Refuse to load binary content into the text editor (spec:
+        // this must never crash on non-text files -- it should
+        // decline gracefully instead). Detection is byte-content
+        // based, not extension based, per section 30.
+        if (!unsavedEdits.containsKey(uri) && store.isLikelyBinary(uri)) {
+            unsupportedFileMessage = "\"$name\" doesn't look like a text file and can't be opened here."
+            openFile = null
+            selectedUri = uri
+            explorerOpen = false
+            return
+        }
+
+        val content = unsavedEdits[uri] ?: store.readFile(uri)
+        unsupportedFileMessage = null
         openFile = OpenFile(uri, name, content, isDirty = unsavedEdits.containsKey(uri))
         selectedUri = uri
         explorerOpen = false
@@ -308,14 +324,14 @@ fun EditorScreen(onSwipeToAi: () -> Unit) {
                     onSelectTextResult = { }
                 )
 
-                if (workspaceRoot == null) {
-                    EditorStartScreen(
+                when {
+                    workspaceRoot == null -> EditorStartScreen(
                         onNewFile = { openFolderLauncher.launch(null) },
                         onOpenFile = { openFileLauncher.launch(arrayOf("text/*")) },
                         onOpenFolder = { openFolderLauncher.launch(null) }
                     )
-                } else {
-                    TextEditorView(
+                    unsupportedFileMessage != null -> UnsupportedFileScreen(unsupportedFileMessage!!)
+                    else -> TextEditorView(
                         openFile = openFile,
                         onContentChange = { onContentChange(it) }
                     )
@@ -405,6 +421,13 @@ private fun EditorStartScreen(
             )
             Text(" to start.", color = TextSecondary)
         }
+    }
+}
+
+@Composable
+private fun UnsupportedFileScreen(message: String) {
+    Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
+        Text(message, color = TextSecondary)
     }
 }
 
