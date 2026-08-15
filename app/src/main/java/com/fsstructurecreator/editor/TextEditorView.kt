@@ -5,10 +5,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -18,6 +17,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
@@ -58,8 +58,6 @@ fun TextEditorView(
     val scope = rememberCoroutineScope()
 
     var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
-    // Reset the active highlight whenever the open file changes, so a
-    // stale highlight from a previous file never lingers.
     var activeHighlightRange by remember(openFile.uri) { mutableStateOf<IntRange?>(null) }
 
     LaunchedEffect(highlightRequest, textLayout) {
@@ -81,9 +79,6 @@ fun TextEditorView(
             scrollState.animateScrollTo(targetTop.coerceAtMost(scrollState.maxValue))
         }
 
-        // Clears the pending request in EditorScreen -- the highlight
-        // itself stays visible via activeHighlightRange above until a
-        // new search result is picked or the file changes.
         onHighlightConsumed()
     }
 
@@ -106,7 +101,7 @@ fun TextEditorView(
         }
     }
 
-    OutlinedTextField(
+    BasicTextField(
         value = openFile.content,
         onValueChange = onContentChange,
         onTextLayout = { textLayout = it },
@@ -116,14 +111,7 @@ fun TextEditorView(
             fontSize = 13.sp,
             color = TextPrimary
         ),
-        colors = TextFieldDefaults.colors(
-            focusedContainerColor = Color.Transparent,
-            unfocusedContainerColor = Color.Transparent,
-            focusedIndicatorColor = Color.Transparent,
-            unfocusedIndicatorColor = Color.Transparent,
-            focusedTextColor = TextPrimary,
-            unfocusedTextColor = TextPrimary
-        ),
+        cursorBrush = SolidColor(TextPrimary),
         modifier = Modifier
             .fillMaxSize()
             .background(CharcoalBg)
@@ -132,15 +120,11 @@ fun TextEditorView(
     )
 }
 
-/** Converts a (line number, column) search-result position into an
- *  absolute character offset within the full file content, so it can
- *  be used with TextLayoutResult for scroll positioning and with
- *  AnnotatedString for highlighting. */
 private fun absoluteOffset(content: String, lineNumber: Int, column: Int): Int {
     val lines = content.split("\n")
     var offset = 0
     for (i in 0 until (lineNumber - 1).coerceAtMost(lines.size)) {
-        offset += lines[i].length + 1 // +1 for the newline character
+        offset += lines[i].length + 1
     }
     return (offset + column).coerceAtMost(content.length)
 }
