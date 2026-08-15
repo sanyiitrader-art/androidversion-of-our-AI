@@ -11,6 +11,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -70,6 +72,20 @@ import com.fsstructurecreator.ui.TextSecondary
 import com.fsstructurecreator.ui.TextTertiary
 import kotlinx.coroutines.delay
 
+private fun initialFieldValueForEdit(edit: InlineEditState): TextFieldValue {
+    return if (edit.isRename) {
+        val text = edit.initialText
+        val selection = if (!edit.isDirectory && text.contains('.')) {
+            TextRange(0, text.substringBeforeLast('.').length)
+        } else {
+            TextRange(0, text.length)
+        }
+        TextFieldValue(text = text, selection = selection)
+    } else {
+        TextFieldValue("")
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ExplorerSidebar(
@@ -89,6 +105,23 @@ fun ExplorerSidebar(
 ) {
     var pendingDeleteNode by remember { mutableStateOf<WorkspaceNode?>(null) }
     val listState = rememberLazyListState()
+
+    // Lifted up from the field itself so BOTH "press Enter" and "tap
+    // empty space elsewhere in the panel" can read/commit the current
+    // typed text via the same code path. Keyed on a stable identity
+    // (not the whole InlineEditState) so a duplicate-name error --
+    // which mutates inlineEdit.error -- doesn't reset what the user
+    // already typed.
+    val editKey = inlineEdit?.let { "${it.isRename}|${it.existingUri}|${it.parentUri}|${it.isDirectory}" }
+    var inlineFieldValue by remember(editKey) {
+        mutableStateOf(inlineEdit?.let { initialFieldValueForEdit(it) } ?: TextFieldValue(""))
+    }
+
+    fun commitOrCancelPendingEdit() {
+        if (inlineEdit == null) return
+        val trimmed = inlineFieldValue.text.trim()
+        if (trimmed.isEmpty()) onCancelInlineEdit() else onSubmitInlineEdit(trimmed)
+    }
 
     AnimatedVisibility(
         visible = visible,
@@ -119,10 +152,6 @@ fun ExplorerSidebar(
                 val visibleNodes = tree?.let { flattenVisible(it) } ?: emptyList()
                 val horizontalScrollState = rememberScrollState()
 
-                // Whenever a rename begins, scroll the Explorer list so the
-                // item actually being renamed is guaranteed on-screen --
-                // otherwise the inline field can render correctly but sit
-                // just below the visible viewport (only its top edge showing).
                 LaunchedEffect(inlineEdit) {
                     val edit = inlineEdit
                     if (edit != null && edit.isRename) {
@@ -147,9 +176,9 @@ fun ExplorerSidebar(
                         if (isRenamingThisNode) {
                             InlineNameField(
                                 depth = node.depth,
-                                initialText = inlineEdit!!.initialText,
-                                error = inlineEdit.error,
-                                selectNameOnlyForFile = !inlineEdit.isDirectory,
+                                value = inlineFieldValue,
+                                onValueChange = { inlineFieldValue = it },
+                                error = inlineEdit!!.error,
                                 onSubmit = onSubmitInlineEdit,
                                 onCancel = onCancelInlineEdit
                             )
@@ -167,23 +196,43 @@ fun ExplorerSidebar(
                         if (inlineEdit != null && !inlineEdit.isRename && inlineEdit.parentUri == node.uri) {
                             InlineNameField(
                                 depth = node.depth + 1,
-                                initialText = "",
+                                value = inlineFieldValue,
+                                onValueChange = { inlineFieldValue = it },
                                 error = inlineEdit.error,
                                 onSubmit = onSubmitInlineEdit,
                                 onCancel = onCancelInlineEdit
                             )
                         }
                     }
-                }
 
-                if (inlineEdit != null && !inlineEdit.isRename && tree != null && inlineEdit.parentUri == tree.uri) {
-                    InlineNameField(
-                        depth = 1,
-                        initialText = "",
-                        error = inlineEdit.error,
-                        onSubmit = onSubmitInlineEdit,
-                        onCancel = onCancelInlineEdit
-                    )
+                    if (inlineEdit != null && !inlineEdit.isRename && tree != null && inlineEdit.parentUri == tree.uri) {
+                        item {
+                            InlineNameField(
+                                depth = 1,
+                                value = inlineFieldValue,
+                                onValueChange = { inlineFieldValue = it },
+                                error = inlineEdit.error,
+                                onSubmit = onSubmitInlineEdit,
+                                onCancel = onCancelInlineEdit
+                            )
+                        }
+                    }
+
+                    // Generous blank tappable zone below the list content.
+                    // Tapping it while an inline edit is active commits the
+                    // current text (same as pressing Enter) or discards it
+                    // if the field was left empty.
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(400.dp)
+                                .clickable(
+                                    indication = null,
+                                    interactionSource = remember { MutableInteractionSource() }
+                                ) { commitOrCancelPendingEdit() }
+                        )
+                    }
                 }
             }
 
@@ -192,7 +241,10 @@ fun ExplorerSidebar(
                     .fillMaxHeight()
                     .fillMaxWidth()
                     .background(Color.Black.copy(alpha = 0.4f))
-                    .clickable { onDismiss() }
+                    .clickable {
+                        commitOrCancelPendingEdit()
+                        onDismiss()
+                    }
             )
         }
     }
@@ -302,29 +354,17 @@ private fun ExplorerRow(
 @Composable
 private fun InlineNameField(
     depth: Int,
-    initialText: String,
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
     error: CreationErrorState,
-    selectNameOnlyForFile: Boolean = false,
     onSubmit: (String) -> Unit,
     onCancel: () -> Unit
 ) {
-    val nameWithoutExt = if (selectNameOnlyForFile && initialText.contains('.')) {
-        initialText.substringBeforeLast('.')
-    } else initialText
-
-    var fieldValue by remember {
-        mutableStateOf(
-            TextFieldValue(
-                text = initialText,
-                selection = if (selectNameOnlyForFile) TextRange(0, nameWithoutExt.length) else TextRange(0, initialText.length)
-            )
-        )
-    }
     val focusRequester = remember { FocusRequester() }
     val shakeOffset = remember { Animatable(0f) }
 
     LaunchedEffect(Unit) {
-        delay(150) // let the list-scroll-into-view settle before grabbing focus
+        delay(150)
         focusRequester.requestFocus()
     }
 
@@ -340,17 +380,12 @@ private fun InlineNameField(
 
     val borderColor = if (error == CreationErrorState.DUPLICATE_NAME) DangerColor else Mint
 
-    fun submit() {
-        val trimmed = fieldValue.text.trim()
-        if (trimmed.isNotEmpty()) onSubmit(trimmed)
-    }
-
     OutlinedTextField(
-        value = fieldValue,
-        onValueChange = { fieldValue = it },
+        value = value,
+        onValueChange = onValueChange,
         singleLine = true,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-        keyboardActions = KeyboardActions(onDone = { submit() }),
+        keyboardActions = KeyboardActions(onDone = { onSubmit(value.text) }),
         colors = TextFieldDefaults.colors(
             focusedContainerColor = CharcoalInput,
             unfocusedContainerColor = CharcoalInput,

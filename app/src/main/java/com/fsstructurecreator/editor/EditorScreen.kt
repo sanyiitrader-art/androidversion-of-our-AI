@@ -177,12 +177,46 @@ fun EditorScreen(
         )
     }
 
+    /** Handles both Enter and "tap empty space" submissions (same
+     *  contract, single source of truth):
+     *  - blank name -> discard: creation is cancelled, or rename is
+     *    reverted (store.rename() is never called, so there's nothing
+     *    to undo -- the row already still shows the original name).
+     *  - rename to the SAME name -> closes without calling the SAF
+     *    provider at all. Several providers refuse to "rename" a
+     *    document to its own current name and report failure, which
+     *    previously showed as a confusing duplicate-name shake for a
+     *    genuine no-op.
+     *  - rename to a new name -> on success, patches the tree (and the
+     *    open file, if it's the one being renamed) in memory
+     *    immediately, rather than relying solely on a fresh SAF
+     *    requery, which can lag behind on some providers and make a
+     *    successful rename look like it silently did nothing.
+     */
     fun submitInlineEdit(name: String) {
         val edit = inlineEdit ?: return
+        val trimmed = name.trim()
+
+        if (trimmed.isEmpty()) {
+            inlineEdit = null
+            return
+        }
+
         if (edit.isRename && edit.existingUri != null) {
-            val ok = store.rename(edit.existingUri, name)
+            if (trimmed == edit.initialText) {
+                inlineEdit = null
+                return
+            }
+
+            val ok = store.rename(edit.existingUri, trimmed)
             if (ok) {
                 inlineEdit = null
+                session.tree = session.tree?.let {
+                    updateNode(it, edit.existingUri) { n -> n.copy(name = trimmed) }
+                }
+                if (session.openFile?.uri == edit.existingUri) {
+                    session.openFile = session.openFile?.copy(name = trimmed)
+                }
                 refreshTree()
             } else {
                 inlineEdit = edit.copy(error = CreationErrorState.DUPLICATE_NAME)
@@ -191,9 +225,9 @@ fun EditorScreen(
         }
 
         val result = if (edit.isDirectory) {
-            store.createFolder(edit.parentUri, name)
+            store.createFolder(edit.parentUri, trimmed)
         } else {
-            store.createFile(edit.parentUri, name)
+            store.createFile(edit.parentUri, trimmed)
         }
 
         when (result) {
@@ -211,9 +245,6 @@ fun EditorScreen(
         }
     }
 
-    /** Checks whether targetUri is deletedUri itself or lives anywhere
-     *  underneath it -- used so deleting a folder correctly clears the
-     *  open file / unsaved edits for anything that was inside it. */
     fun isUnderOrEqual(targetUri: String, deletedNode: WorkspaceNode): Boolean {
         if (targetUri == deletedNode.uri) return true
         fun search(n: WorkspaceNode): Boolean {
