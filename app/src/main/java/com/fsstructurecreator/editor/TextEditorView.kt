@@ -1,8 +1,11 @@
 package com.fsstructurecreator.editor
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
@@ -56,9 +59,23 @@ fun TextEditorView(
     val extension = openFile.name.substringAfterLast('.', "")
     val scrollState = rememberScrollState()
     val scope = rememberCoroutineScope()
+    val interactionSource = remember { MutableInteractionSource() }
 
     var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
     var activeHighlightRange by remember(openFile.uri) { mutableStateOf<IntRange?>(null) }
+
+    // Clears the search highlight the moment the user taps into the
+    // editor to reposition their cursor -- a tap is reported as a
+    // PressInteraction regardless of where in the field it lands, so
+    // this doesn't interfere with the field's own selection/caret
+    // gestures, it just also clears the highlight alongside them.
+    LaunchedEffect(interactionSource, openFile.uri) {
+        interactionSource.interactions.collect { interaction ->
+            if (interaction is PressInteraction.Press) {
+                activeHighlightRange = null
+            }
+        }
+    }
 
     LaunchedEffect(highlightRequest, textLayout) {
         val request = highlightRequest ?: return@LaunchedEffect
@@ -106,6 +123,7 @@ fun TextEditorView(
         onValueChange = onContentChange,
         onTextLayout = { textLayout = it },
         visualTransformation = visualTransformation,
+        interactionSource = interactionSource,
         textStyle = TextStyle(
             fontFamily = FontFamily.Monospace,
             fontSize = 13.sp,
@@ -117,6 +135,7 @@ fun TextEditorView(
             .background(CharcoalBg)
             .padding(12.dp)
             .verticalScroll(scrollState)
+            .imePadding()
     )
 }
 

@@ -122,14 +122,32 @@ fun ExplorerSidebar(
                 ) {
                     tree?.let { root ->
                         items(flattenVisible(root)) { node ->
-                            ExplorerRow(
-                                node = node,
-                                isSelected = node.uri == selectedUri,
-                                onClick = { onSelectNode(node) },
-                                onLongPressRename = { onRenameRequest(node) },
-                                onLongPressNewFile = { if (node.isDirectory) { onSelectNode(node); onCreateFile() } },
-                                onLongPressDelete = { pendingDeleteNode = node }
-                            )
+                            val isRenamingThisNode =
+                                inlineEdit != null && inlineEdit.isRename && inlineEdit.existingUri == node.uri
+
+                            if (isRenamingThisNode) {
+                                // Renders IN PLACE of the row itself -- the
+                                // long-pressed item becomes the editable
+                                // field, not a separate box elsewhere.
+                                InlineNameField(
+                                    depth = node.depth,
+                                    initialText = inlineEdit!!.initialText,
+                                    error = inlineEdit.error,
+                                    selectNameOnlyForFile = !inlineEdit.isDirectory,
+                                    onSubmit = onSubmitInlineEdit,
+                                    onCancel = onCancelInlineEdit
+                                )
+                            } else {
+                                ExplorerRow(
+                                    node = node,
+                                    isSelected = node.uri == selectedUri,
+                                    onClick = { onSelectNode(node) },
+                                    onLongPressRename = { onRenameRequest(node) },
+                                    onLongPressNewFile = { if (node.isDirectory) { onSelectNode(node); onCreateFile() } },
+                                    onLongPressDelete = { pendingDeleteNode = node }
+                                )
+                            }
+
                             if (inlineEdit != null && !inlineEdit.isRename && inlineEdit.parentUri == node.uri) {
                                 InlineNameField(
                                     depth = node.depth + 1,
@@ -141,17 +159,6 @@ fun ExplorerSidebar(
                             }
                         }
                     }
-                }
-
-                if (inlineEdit != null && inlineEdit.isRename) {
-                    InlineNameField(
-                        depth = 0,
-                        initialText = inlineEdit.initialText,
-                        error = inlineEdit.error,
-                        selectNameOnlyForFile = !inlineEdit.isDirectory,
-                        onSubmit = onSubmitInlineEdit,
-                        onCancel = onCancelInlineEdit
-                    )
                 }
 
                 if (inlineEdit != null && !inlineEdit.isRename && tree != null && inlineEdit.parentUri == tree.uri) {
