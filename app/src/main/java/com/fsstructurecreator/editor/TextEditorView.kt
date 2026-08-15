@@ -6,7 +6,6 @@ import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.onSizeChanged
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
@@ -22,6 +21,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
@@ -63,10 +63,6 @@ fun TextEditorView(
     val scope = rememberCoroutineScope()
     val interactionSource = remember { MutableInteractionSource() }
 
-    // TextFieldValue (not just String) so we can read the caret
-    // position for scroll-to-cursor tracking. Re-synced whenever the
-    // open file changes so switching files doesn't carry over a stale
-    // selection from the previous one.
     var fieldValue by remember(openFile.uri) {
         mutableStateOf(TextFieldValue(openFile.content))
     }
@@ -105,11 +101,6 @@ fun TextEditorView(
         onHighlightConsumed()
     }
 
-    // Follows the text cursor: whenever the caret moves (typing, arrow
-    // keys, tapping) or the visible viewport height changes (keyboard
-    // opening/closing), scrolls just enough to keep the caret's line
-    // inside the visible window -- not just "above the keyboard" in
-    // general, but actually tracking where you're typing.
     LaunchedEffect(fieldValue.selection, textLayout, viewportHeight) {
         val layout = textLayout ?: return@LaunchedEffect
         if (viewportHeight <= 0) return@LaunchedEffect
