@@ -88,17 +88,28 @@ class WorkspaceStore(private val context: Context) {
         }
     }
 
-    /** Renames a file or folder. Wrapped defensively: Android's
-     *  DocumentFile.renameTo() can throw (some storage providers, or
-     *  invalid target names, fail this way rather than just returning
-     *  false) -- an uncaught throw here previously crashed the whole
-     *  app instead of surfacing as a normal "couldn't rename" result. */
-    fun rename(uri: String, newName: String): Boolean {
+    /** Renames a file or folder. Rebuilt to navigate down from a
+     *  fromTreeUri() parent (same proven pattern as createFile/
+     *  createFolder) and locate the target by its current name,
+     *  rather than reconstructing it via fromSingleUri() on a bare
+     *  document URI -- that pattern was unreliable for SAF documents
+     *  that only hold permission via their covering tree grant.
+     *  Returns the item's real post-rename URI on success, since some
+     *  storage providers change the underlying document ID when an
+     *  item is renamed. */
+    fun rename(parentUri: String, oldName: String, newName: String): RenameResult {
         return try {
-            val doc = DocumentFile.fromSingleUri(context, Uri.parse(uri))
-            doc?.renameTo(newName) ?: false
+            val parent = DocumentFile.fromTreeUri(context, Uri.parse(parentUri)) ?: return RenameResult.Failure
+            if (newName != oldName && parent.findFile(newName) != null) return RenameResult.DuplicateName
+
+            val target = parent.findFile(oldName) ?: return RenameResult.Failure
+            val ok = target.renameTo(newName)
+            if (!ok) return RenameResult.Failure
+
+            val renamed = parent.findFile(newName) ?: target
+            RenameResult.Success(renamed.uri.toString())
         } catch (e: Exception) {
-            false
+            RenameResult.Failure
         }
     }
 
@@ -126,5 +137,11 @@ class WorkspaceStore(private val context: Context) {
         data class Success(val uri: String) : CreateResult()
         object DuplicateName : CreateResult()
         object Failure : CreateResult()
+    }
+
+    sealed class RenameResult {
+        data class Success(val newUri: String) : RenameResult()
+        object DuplicateName : RenameResult()
+        object Failure : RenameResult()
     }
 }

@@ -177,22 +177,6 @@ fun EditorScreen(
         )
     }
 
-    /** Handles both Enter and "tap empty space" submissions (same
-     *  contract, single source of truth):
-     *  - blank name -> discard: creation is cancelled, or rename is
-     *    reverted (store.rename() is never called, so there's nothing
-     *    to undo -- the row already still shows the original name).
-     *  - rename to the SAME name -> closes without calling the SAF
-     *    provider at all. Several providers refuse to "rename" a
-     *    document to its own current name and report failure, which
-     *    previously showed as a confusing duplicate-name shake for a
-     *    genuine no-op.
-     *  - rename to a new name -> on success, patches the tree (and the
-     *    open file, if it's the one being renamed) in memory
-     *    immediately, rather than relying solely on a fresh SAF
-     *    requery, which can lag behind on some providers and make a
-     *    successful rename look like it silently did nothing.
-     */
     fun submitInlineEdit(name: String) {
         val edit = inlineEdit ?: return
         val trimmed = name.trim()
@@ -208,18 +192,30 @@ fun EditorScreen(
                 return
             }
 
-            val ok = store.rename(edit.existingUri, trimmed)
-            if (ok) {
-                inlineEdit = null
-                session.tree = session.tree?.let {
-                    updateNode(it, edit.existingUri) { n -> n.copy(name = trimmed) }
+            when (val result = store.rename(edit.parentUri, edit.initialText, trimmed)) {
+                is WorkspaceStore.RenameResult.Success -> {
+                    val newUri = result.newUri
+                    inlineEdit = null
+                    session.tree = session.tree?.let {
+                        updateNode(it, edit.existingUri) { n -> n.copy(uri = newUri, name = trimmed) }
+                    }
+                    if (session.openFile?.uri == edit.existingUri) {
+                        session.openFile = session.openFile?.copy(uri = newUri, name = trimmed)
+                    }
+                    if (session.selectedUri == edit.existingUri) {
+                        session.selectedUri = newUri
+                    }
+                    refreshTree()
                 }
-                if (session.openFile?.uri == edit.existingUri) {
-                    session.openFile = session.openFile?.copy(name = trimmed)
+                WorkspaceStore.RenameResult.DuplicateName -> {
+                    inlineEdit = edit.copy(error = CreationErrorState.DUPLICATE_NAME)
                 }
-                refreshTree()
-            } else {
-                inlineEdit = edit.copy(error = CreationErrorState.DUPLICATE_NAME)
+                WorkspaceStore.RenameResult.Failure -> {
+                    // Genuine failure, not a name collision -- revert
+                    // quietly rather than showing a misleading
+                    // "duplicate name" shake for an unrelated problem.
+                    inlineEdit = null
+                }
             }
             return
         }

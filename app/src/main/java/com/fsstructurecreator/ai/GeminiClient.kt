@@ -28,8 +28,11 @@ import java.net.URL
 
 class GeminiClient(private val getApiKey: () -> String?) {
 
+    // Switched from gemini-3.5-flash to gemini-3.5-flash-lite:
+    // 1000 requests/day vs 120/day, well suited to this app's
+    // structured, low-complexity interpretation task.
     private val endpoint =
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent"
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent"
 
     private val json = Json { ignoreUnknownKeys = true }
 
