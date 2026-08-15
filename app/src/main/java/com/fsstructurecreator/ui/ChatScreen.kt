@@ -13,15 +13,18 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -83,11 +86,6 @@ private fun summarizeForAi(results: List<com.fsstructurecreator.data.FsOperation
     else "[Execution result]\n" + lines.joinToString("\n")
 }
 
-/** Returns the saved folder URI only if Android still actually grants
- *  us write access to it -- if the permission was revoked (e.g. via
- *  Android settings) since it was saved, this returns null and clears
- *  the stale value, rather than letting a later filesystem call fail
- *  with a confusing generic error. */
 private fun currentlyValidFolderUri(context: Context, prefs: android.content.SharedPreferences): String? {
     val saved = prefs.getString(KEY_SELECTED_FOLDER_URI, null) ?: return null
     val stillGranted = context.contentResolver.persistedUriPermissions.any {
@@ -101,7 +99,10 @@ private fun currentlyValidFolderUri(context: Context, prefs: android.content.Sha
 }
 
 @Composable
-fun ChatScreen() {
+fun ChatScreen(
+    onOpenEditor: () -> Unit,
+    onSwipeToEditor: () -> Unit
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -254,12 +255,16 @@ fun ChatScreen() {
         modifier = Modifier
             .fillMaxSize()
             .background(CharcoalBg)
-            .pointerInput(Unit) {
+            .pointerInput(sidebarOpen) {
                 var totalDrag = 0f
                 detectHorizontalDragGestures(
                     onDragEnd = {
-                        if (totalDrag > 100f) sidebarOpen = true
-                        else if (totalDrag < -100f) sidebarOpen = false
+                        if (sidebarOpen) {
+                            if (totalDrag < -100f) sidebarOpen = false
+                        } else {
+                            if (totalDrag > 100f) sidebarOpen = true
+                            else if (totalDrag < -100f) onSwipeToEditor()
+                        }
                         totalDrag = 0f
                     },
                     onHorizontalDrag = { _, dragAmount -> totalDrag += dragAmount }
@@ -278,6 +283,10 @@ fun ChatScreen() {
                     Icon(Icons.Filled.Menu, contentDescription = "Menu", tint = TextPrimary)
                 }
                 Text("FS Structure Creator", color = TextPrimary, modifier = Modifier.padding(start = 4.dp))
+                Spacer(modifier = Modifier.weight(1f))
+                IconButton(onClick = onOpenEditor) {
+                    Icon(Icons.Filled.InsertDriveFile, contentDescription = "Editor", tint = TextPrimary)
+                }
             }
 
             LazyColumn(
