@@ -50,6 +50,9 @@ import com.fsstructurecreator.ui.Mint
 import com.fsstructurecreator.ui.TextPrimary
 import com.fsstructurecreator.ui.TextSecondary
 import com.fsstructurecreator.ui.TextTertiary
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class InlineEditState(
     val parentUri: String,
@@ -81,9 +84,18 @@ fun EditorScreen(
         return node.copy(children = node.children.map { updateNode(it, targetUri, transform) })
     }
 
-    fun refreshTree(preserveExpansion: Boolean = true) {
+    // Every store.* call below now runs on Dispatchers.IO -- SAF/
+    // content-resolver queries are real I/O and were previously
+    // blocking the main thread on every interaction, which is what
+    // caused the lag (button taps, swipes, and recompositions all had
+    // to wait behind whatever filesystem call was running). State
+    // writes still happen on the calling (Main) dispatcher, since
+    // withContext resumes there automatically once the IO work
+    // finishes.
+
+    suspend fun refreshTree(preserveExpansion: Boolean = true) {
         val root = session.workspaceRoot ?: return
-        val newTree = store.loadTree(root) ?: return
+        val newTree = withContext(Dispatchers.IO) { store.loadTree(root) } ?: return
         if (!preserveExpansion || session.tree == null) {
             session.tree = newTree
             return
@@ -101,11 +113,7 @@ fun EditorScreen(
         session.tree = applyExpansion(newTree)
     }
 
-    // Refreshes the tree from disk whenever this app returns to the
-    // foreground -- catches files/folders created or changed by other
-    // apps (or another File Manager) while our app was in the
-    // background, so the Explorer never silently shows stale content.
-    val currentRefresh = rememberUpdatedState { refreshTree() }
+    val currentRefresh = rememberUpdatedState { scope.launch { refreshTree() } }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -117,17 +125,18 @@ fun EditorScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    fun setWorkspaceRoot(uri: String) {
+    suspend fun setWorkspaceRoot(uri: String) {
         session.workspaceRoot = uri
         session.selectedUri = null
         session.openFile = null
         session.unsupportedFileMessage = null
         session.navHistory = NavigationHistory()
         session.unsavedEdits = emptyMap()
-        session.tree = store.loadTree(uri)?.copy(isExpanded = true)
+        val loaded = withContext(Dispatchers.IO) { store.loadTree(uri) }
+        session.tree = loaded?.copy(isExpanded = true)
     }
 
-    fun openFileAt(uri: String, addToHistory: Boolean = true) {
+    suspend fun openFileAt(uri: String, addToHistory: Boolean = true) {
         fun findName(n: WorkspaceNode?): String? {
             if (n == null) return null
             if (n.uri == uri) return n.name
@@ -136,15 +145,18 @@ fun EditorScreen(
         }
         val name = findName(session.tree) ?: uri.substringAfterLast('/')
 
-        if (!session.unsavedEdits.containsKey(uri) && store.isLikelyBinary(uri)) {
-            session.unsupportedFileMessage = "\"$name\" doesn't look like a text file and can't be opened here."
-            session.openFile = null
-            session.selectedUri = uri
-            explorerOpen = false
-            return
+        if (!session.unsavedEdits.containsKey(uri)) {
+            val isBinary = withContext(Dispatchers.IO) { store.isLikelyBinary(uri) }
+            if (isBinary) {
+                session.unsupportedFileMessage = "\"$name\" doesn't look like a text file and can't be opened here."
+                session.openFile = null
+                session.selectedUri = uri
+                explorerOpen = false
+                return
+            }
         }
 
-        val content = session.unsavedEdits[uri] ?: store.readFile(uri)
+        val content = session.unsavedEdits[uri] ?: withContext(Dispatchers.IO) { store.readFile(uri) }
         session.unsupportedFileMessage = null
         session.openFile = OpenFile(uri, name, content, isDirty = session.unsavedEdits.containsKey(uri))
         session.selectedUri = uri
@@ -160,7 +172,7 @@ fun EditorScreen(
         session.tree = session.tree?.let { updateNode(it, uri, { n -> n.copy(isExpanded = true) }) }
     }
 
-    fun selectNode(node: WorkspaceNode) {
+    suspend fun selectNode(node: WorkspaceNode) {
         if (node.isDirectory) {
             session.selectedUri = node.uri
             toggleExpand(node.uri)
@@ -198,7 +210,7 @@ fun EditorScreen(
         )
     }
 
-    fun submitInlineEdit(name: String) {
+    suspend fun submitInlineEdit(name: String) {
         val edit = inlineEdit ?: return
         val trimmed = name.trim()
 
@@ -213,7 +225,9 @@ fun EditorScreen(
                 return
             }
 
-            when (val result = store.rename(edit.parentUri, edit.initialText, trimmed)) {
+            when (val result = withContext(Dispatchers.IO) {
+                store.rename(edit.parentUri, edit.initialText, trimmed)
+            }) {
                 is WorkspaceStore.RenameResult.Success -> {
                     val newUri = result.newUri
                     inlineEdit = null
@@ -238,10 +252,9 @@ fun EditorScreen(
             return
         }
 
-        val result = if (edit.isDirectory) {
-            store.createFolder(edit.parentUri, trimmed)
-        } else {
-            store.createFile(edit.parentUri, trimmed)
+        val result = withContext(Dispatchers.IO) {
+            if (edit.isDirectory) store.createFolder(edit.parentUri, trimmed)
+            else store.createFile(edit.parentUri, trimmed)
         }
 
         when (result) {
@@ -268,8 +281,8 @@ fun EditorScreen(
         return deletedNode.children.any { search(it) }
     }
 
-    fun deleteNode(node: WorkspaceNode) {
-        val ok = store.delete(node.uri)
+    suspend fun deleteNode(node: WorkspaceNode) {
+        val ok = withContext(Dispatchers.IO) { store.delete(node.uri) }
         if (!ok) return
 
         val openUri = session.openFile?.uri
@@ -289,32 +302,38 @@ fun EditorScreen(
         session.openFile = current.copy(content = newContent, isDirty = true)
         session.unsavedEdits = session.unsavedEdits + (current.uri to newContent)
         if (session.autoSave) {
-            store.writeFile(current.uri, newContent)
-            session.unsavedEdits = session.unsavedEdits - current.uri
-            session.openFile = session.openFile?.copy(isDirty = false)
+            scope.launch {
+                withContext(Dispatchers.IO) { store.writeFile(current.uri, newContent) }
+                session.unsavedEdits = session.unsavedEdits - current.uri
+                session.openFile = session.openFile?.copy(isDirty = false)
+            }
         }
     }
 
-    fun saveCurrent() {
+    suspend fun saveCurrent() {
         val current = session.openFile ?: return
-        store.writeFile(current.uri, current.content)
+        withContext(Dispatchers.IO) { store.writeFile(current.uri, current.content) }
         session.unsavedEdits = session.unsavedEdits - current.uri
         session.openFile = current.copy(isDirty = false)
     }
 
-    fun saveAll() {
-        session.unsavedEdits.forEach { (uri, content) -> store.writeFile(uri, content) }
+    suspend fun saveAll() {
+        val edits = session.unsavedEdits
+        withContext(Dispatchers.IO) {
+            edits.forEach { (uri, content) -> store.writeFile(uri, content) }
+        }
         session.unsavedEdits = emptyMap()
         session.openFile = session.openFile?.copy(isDirty = false)
     }
 
-    fun startNewWorkspace(createFileNotFolder: Boolean) {
+    suspend fun startNewWorkspace(createFileNotFolder: Boolean) {
         val parentForNewRoot = session.workspaceRoot ?: return
-        val uniqueName = store.uniqueWorkspaceFolderName(parentForNewRoot)
-        val result = store.createFolder(parentForNewRoot, uniqueName)
+        val uniqueName = withContext(Dispatchers.IO) { store.uniqueWorkspaceFolderName(parentForNewRoot) }
+        val result = withContext(Dispatchers.IO) { store.createFolder(parentForNewRoot, uniqueName) }
         if (result is WorkspaceStore.CreateResult.Success) {
             setWorkspaceRoot(parentForNewRoot)
-            session.tree = store.loadTree(parentForNewRoot)?.copy(isExpanded = true)
+            val loaded = withContext(Dispatchers.IO) { store.loadTree(parentForNewRoot) }
+            session.tree = loaded?.copy(isExpanded = true)
             session.selectedUri = result.uri
             explorerOpen = true
             beginCreate(isDirectory = !createFileNotFolder)
@@ -330,7 +349,7 @@ fun EditorScreen(
                 android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
                     android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             )
-            setWorkspaceRoot(uri.toString())
+            scope.launch { setWorkspaceRoot(uri.toString()) }
         }
     }
 
@@ -365,7 +384,7 @@ fun EditorScreen(
                 onMenuClick = { menuOpen = true },
                 onExplorerClick = {
                     if (session.workspaceRoot != null) {
-                        refreshTree()
+                        scope.launch { refreshTree() }
                         explorerOpen = true
                     }
                 }
@@ -378,19 +397,23 @@ fun EditorScreen(
                     canGoBack = session.navHistory.canGoBack,
                     canGoForward = session.navHistory.canGoForward,
                     onBack = {
-                        session.navHistory = session.navHistory.goBack()
-                        session.navHistory.current?.let { openFileAt(it, addToHistory = false) }
+                        scope.launch {
+                            session.navHistory = session.navHistory.goBack()
+                            session.navHistory.current?.let { openFileAt(it, addToHistory = false) }
+                        }
                     },
                     onForward = {
-                        session.navHistory = session.navHistory.goForward()
-                        session.navHistory.current?.let { openFileAt(it, addToHistory = false) }
+                        scope.launch {
+                            session.navHistory = session.navHistory.goForward()
+                            session.navHistory.current?.let { openFileAt(it, addToHistory = false) }
+                        }
                     },
                     tree = session.tree,
                     openFileContent = session.openFile?.content,
                     currentFileName = session.openFile?.name,
                     searchMode = searchMode,
                     onSearchModeChange = { searchMode = it },
-                    onSelectFileResult = { openFileAt(it) },
+                    onSelectFileResult = { path -> scope.launch { openFileAt(path) } },
                     onSelectTextResult = { result -> highlightRequest = result }
                 )
 
@@ -416,13 +439,13 @@ fun EditorScreen(
             tree = session.tree,
             selectedUri = session.selectedUri,
             onToggleExpand = { toggleExpand(it) },
-            onSelectNode = { selectNode(it) },
+            onSelectNode = { node -> scope.launch { selectNode(node) } },
             onCreateFile = { beginCreate(isDirectory = false) },
             onCreateFolder = { beginCreate(isDirectory = true) },
             onRenameRequest = { beginRename(it) },
-            onDeleteRequest = { deleteNode(it) },
+            onDeleteRequest = { node -> scope.launch { deleteNode(node) } },
             inlineEdit = inlineEdit,
-            onSubmitInlineEdit = { submitInlineEdit(it) },
+            onSubmitInlineEdit = { name -> scope.launch { submitInlineEdit(name) } },
             onCancelInlineEdit = { inlineEdit = null },
             onDismiss = { explorerOpen = false }
         )
@@ -431,12 +454,12 @@ fun EditorScreen(
             visible = menuOpen,
             autoSave = session.autoSave,
             onAutoSaveToggle = { session.autoSave = it },
-            onNewFile = { menuOpen = false; startNewWorkspace(createFileNotFolder = true) },
-            onNewFolder = { menuOpen = false; startNewWorkspace(createFileNotFolder = false) },
+            onNewFile = { menuOpen = false; scope.launch { startNewWorkspace(createFileNotFolder = true) } },
+            onNewFolder = { menuOpen = false; scope.launch { startNewWorkspace(createFileNotFolder = false) } },
             onOpenFile = { menuOpen = false; openFileLauncher.launch(arrayOf("text/*")) },
             onOpenFolder = { menuOpen = false; openFolderLauncher.launch(null) },
-            onSave = { menuOpen = false; saveCurrent() },
-            onSaveAll = { menuOpen = false; saveAll() },
+            onSave = { menuOpen = false; scope.launch { saveCurrent() } },
+            onSaveAll = { menuOpen = false; scope.launch { saveAll() } },
             onDismiss = { menuOpen = false }
         )
     }
