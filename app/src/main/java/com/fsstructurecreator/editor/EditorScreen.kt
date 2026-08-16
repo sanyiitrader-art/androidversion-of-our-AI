@@ -29,16 +29,21 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.fsstructurecreator.ui.CharcoalBg
 import com.fsstructurecreator.ui.CharcoalElevated
 import com.fsstructurecreator.ui.Mint
@@ -94,6 +99,22 @@ fun EditorScreen(
             return n.copy(isExpanded = expanded, children = n.children.map { applyExpansion(it) })
         }
         session.tree = applyExpansion(newTree)
+    }
+
+    // Refreshes the tree from disk whenever this app returns to the
+    // foreground -- catches files/folders created or changed by other
+    // apps (or another File Manager) while our app was in the
+    // background, so the Explorer never silently shows stale content.
+    val currentRefresh = rememberUpdatedState { refreshTree() }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                currentRefresh.value()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     fun setWorkspaceRoot(uri: String) {
@@ -211,9 +232,6 @@ fun EditorScreen(
                     inlineEdit = edit.copy(error = CreationErrorState.DUPLICATE_NAME)
                 }
                 WorkspaceStore.RenameResult.Failure -> {
-                    // Genuine failure, not a name collision -- revert
-                    // quietly rather than showing a misleading
-                    // "duplicate name" shake for an unrelated problem.
                     inlineEdit = null
                 }
             }
@@ -345,7 +363,12 @@ fun EditorScreen(
         Row(modifier = Modifier.fillMaxSize()) {
             EditorRail(
                 onMenuClick = { menuOpen = true },
-                onExplorerClick = { if (session.workspaceRoot != null) explorerOpen = true }
+                onExplorerClick = {
+                    if (session.workspaceRoot != null) {
+                        refreshTree()
+                        explorerOpen = true
+                    }
+                }
             )
 
             Column(modifier = Modifier.fillMaxSize().weight(1f)) {
