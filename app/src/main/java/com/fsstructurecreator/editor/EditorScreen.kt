@@ -87,6 +87,17 @@ fun EditorScreen(
     suspend fun refreshTree(preserveExpansion: Boolean = true) {
         val root = session.workspaceRoot ?: return
         val newTree = withContext(Dispatchers.IO) { store.loadTree(root) } ?: return
+        // Guard against a stale/incomplete SAF listing racing with a
+        // recent write (e.g. right after typing with Auto Save on) --
+        // if the freshly loaded tree suddenly has no children while
+        // the previously loaded tree for this same root had some,
+        // treat it as a transient read glitch and keep what we
+        // already have rather than replacing a good tree with an
+        // empty one.
+        val previous = session.tree
+        if (newTree.children.isEmpty() && previous != null && previous.uri == root && previous.children.isNotEmpty()) {
+            return
+        }
         if (!preserveExpansion || session.tree == null) {
             session.tree = newTree
             return

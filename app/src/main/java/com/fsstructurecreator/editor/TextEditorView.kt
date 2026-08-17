@@ -48,6 +48,7 @@ import com.fsstructurecreator.ui.TextPrimary
 import com.fsstructurecreator.ui.TextSecondary
 
 private val HighlightMint = Color(0x557EE8C0) // transparent mint
+private val EditorContentPadding = 12.dp
 
 @Composable
 fun TextEditorView(
@@ -86,6 +87,14 @@ fun TextEditorView(
     }
     val lineHeightPx = with(density) { lineHeightSp.toPx() }
     val lineHeightDp = with(density) { lineHeightPx.toDp() }
+    // onSizeChanged (below) measures the Box's full allocated size,
+    // BEFORE its own .padding() shrinks the actually-visible/typable
+    // area on both sides. Without subtracting this out, the scroll-
+    // follow logic thought there was ~24dp more room than there
+    // really was, so the caret could drift under the right/bottom
+    // padding before a scroll ever triggered -- the reported bug
+    // (last typed letter hidden, one behind it shown instead).
+    val contentPaddingPx = with(density) { EditorContentPadding.toPx() }
 
     val extension = openFile.name.substringAfterLast('.', "")
 
@@ -125,6 +134,11 @@ fun TextEditorView(
     LaunchedEffect(fieldValue.selection, viewportWidthPx, viewportHeightPx) {
         if (viewportWidthPx <= 0 || viewportHeightPx <= 0) return@LaunchedEffect
 
+        // Effective viewport = raw measured size minus the padding on
+        // both sides, matching what's actually visible/typable.
+        val effectiveWidth = (viewportWidthPx - 2 * contentPaddingPx).coerceAtLeast(0f)
+        val effectiveHeight = (viewportHeightPx - 2 * contentPaddingPx).coerceAtLeast(0f)
+
         val cursorOffset = fieldValue.selection.end.coerceIn(0, fieldValue.text.length)
         val before = fieldValue.text.substring(0, cursorOffset)
         val cursorLine = before.count { it == '\n' }
@@ -133,10 +147,10 @@ fun TextEditorView(
         val cursorTop = cursorLine * lineHeightPx
         val cursorBottom = cursorTop + lineHeightPx
         val vTop = vScroll.value.toFloat()
-        val vBottom = vTop + viewportHeightPx
+        val vBottom = vTop + effectiveHeight
         val vMargin = 8f
         val newV = when {
-            cursorBottom + vMargin > vBottom -> cursorBottom + vMargin - viewportHeightPx
+            cursorBottom + vMargin > vBottom -> cursorBottom + vMargin - effectiveHeight
             cursorTop - vMargin < vTop -> cursorTop - vMargin
             else -> null
         }
@@ -144,10 +158,10 @@ fun TextEditorView(
 
         val cursorX = cursorColumn * charWidthPx
         val hLeft = hScroll.value.toFloat()
-        val hRight = hLeft + viewportWidthPx
+        val hRight = hLeft + effectiveWidth
         val hMargin = 8f
         val newH = when {
-            cursorX + hMargin > hRight -> cursorX + hMargin - viewportWidthPx
+            cursorX + hMargin > hRight -> cursorX + hMargin - effectiveWidth
             cursorX - hMargin < hLeft -> (cursorX - hMargin).coerceAtLeast(0f)
             else -> null
         }
@@ -181,10 +195,10 @@ fun TextEditorView(
         Column(
             modifier = Modifier
                 .verticalScroll(vScroll)
-                .padding(top = 12.dp, start = 4.dp, end = 4.dp)
+                .padding(top = EditorContentPadding, start = 4.dp, end = 4.dp)
         ) {
             lineTexts.forEachIndexed { index, lineText ->
-                val showNumber = lineText.isNotEmpty() || index == cursorLineNow
+                val showNumber = lineText.isNotEmpty() || index <= cursorLineNow
                 if (showNumber) {
                     LineNumberSquare(number = index + 1, height = lineHeightDp)
                 } else {
@@ -204,7 +218,7 @@ fun TextEditorView(
                 }
                 .verticalScroll(vScroll)
                 .horizontalScroll(hScroll)
-                .padding(12.dp)
+                .padding(EditorContentPadding)
         ) {
             BasicTextField(
                 value = fieldValue,
