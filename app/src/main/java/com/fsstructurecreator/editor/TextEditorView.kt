@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -82,10 +81,6 @@ fun TextEditorView(
         )
     }
 
-    // Monospace guarantee: every character has the same pixel width,
-    // measured once here. This is what lets cursor position and
-    // scroll targeting be computed directly (column * charWidth)
-    // instead of depending on a text-layout callback on every keystroke.
     val charWidthPx = remember(monoStyle) {
         textMeasurer.measure(AnnotatedString("M"), style = monoStyle).size.width.toFloat()
     }
@@ -127,11 +122,6 @@ fun TextEditorView(
         onHighlightConsumed()
     }
 
-    // Cursor-follow scroll, both axes. Keeps the caret visible whether
-    // typing past the right edge of a long unwrapped line (horizontal)
-    // or past the bottom of the visible area (vertical) -- and brings
-    // the view back to the left the instant Enter starts a fresh line
-    // at column 0, per the requested behavior.
     LaunchedEffect(fieldValue.selection, viewportWidthPx, viewportHeightPx) {
         if (viewportWidthPx <= 0 || viewportHeightPx <= 0) return@LaunchedEffect
 
@@ -188,13 +178,6 @@ fun TextEditorView(
     val cursorLineNow = fieldValue.text.substring(0, cursorOffsetNow).count { it == '\n' }
 
     Row(modifier = Modifier.fillMaxSize().background(CharcoalBg)) {
-        // Gutter: vertical-only scroll (shares vScroll with the code
-        // below, so it tracks together), never scrolls horizontally --
-        // a line number stays visible no matter how far right that
-        // line's text has been scrolled. Each row -- a numbered square
-        // or a same-height blank spacer -- lines up 1:1 with the code's
-        // rows below purely because every row shares the exact same
-        // fixed height; no pixel-position math needed.
         Column(
             modifier = Modifier
                 .verticalScroll(vScroll)
@@ -223,11 +206,6 @@ fun TextEditorView(
                 .horizontalScroll(hScroll)
                 .padding(12.dp)
         ) {
-            // No fillMaxWidth here, deliberately: leaving the field
-            // unconstrained inside horizontalScroll is what makes each
-            // line measure at its own natural (unwrapped) width instead
-            // of breaking at the screen edge -- horizontalScroll's max
-            // bound then comes directly from whichever line is longest.
             BasicTextField(
                 value = fieldValue,
                 onValueChange = { newValue ->
