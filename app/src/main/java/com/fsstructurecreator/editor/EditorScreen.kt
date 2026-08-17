@@ -84,15 +84,6 @@ fun EditorScreen(
         return node.copy(children = node.children.map { updateNode(it, targetUri, transform) })
     }
 
-    // Every store.* call below now runs on Dispatchers.IO -- SAF/
-    // content-resolver queries are real I/O and were previously
-    // blocking the main thread on every interaction, which is what
-    // caused the lag (button taps, swipes, and recompositions all had
-    // to wait behind whatever filesystem call was running). State
-    // writes still happen on the calling (Main) dispatcher, since
-    // withContext resumes there automatically once the IO work
-    // finishes.
-
     suspend fun refreshTree(preserveExpansion: Boolean = true) {
         val root = session.workspaceRoot ?: return
         val newTree = withContext(Dispatchers.IO) { store.loadTree(root) } ?: return
