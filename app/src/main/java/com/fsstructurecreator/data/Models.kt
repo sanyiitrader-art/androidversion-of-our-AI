@@ -88,7 +88,14 @@ data class ChatMessage(
     val id: String,
     val role: MessageRole,
     val content: String,
-    val createdAt: String
+    val createdAt: String,
+    // Native-chat feature additions. Defaults keep old saved
+    // conversations (written before this feature existed) loading
+    // fine with no migration step -- every prior message simply
+    // deserializes as liked=false, disliked=false, attachments=[].
+    val liked: Boolean = false,
+    val disliked: Boolean = false,
+    val attachments: List<Attachment> = emptyList()
 )
 
 @Serializable
@@ -112,6 +119,7 @@ enum class AttachmentKind {
     MD
 }
 
+@Serializable
 data class Attachment(
     val name: String,
     val kind: AttachmentKind,

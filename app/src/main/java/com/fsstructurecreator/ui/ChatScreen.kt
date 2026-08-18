@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -48,6 +49,7 @@ import com.fsstructurecreator.data.Conversation
 import com.fsstructurecreator.data.ConversationStore
 import com.fsstructurecreator.data.ConversationSummary
 import com.fsstructurecreator.data.FsOperation
+import com.fsstructurecreator.data.FsOperationResult
 import com.fsstructurecreator.data.FsRequest
 import com.fsstructurecreator.data.MessageRole
 import com.fsstructurecreator.data.SettingsStore
@@ -59,12 +61,17 @@ import java.util.UUID
 private const val PREFS_NAME = "fs_prefs"
 private const val KEY_SELECTED_FOLDER_URI = "selected_folder_uri"
 
-private fun newMessage(role: MessageRole, content: String): ChatMessage {
+private fun newMessage(
+    role: MessageRole,
+    content: String,
+    attachments: List<Attachment> = emptyList()
+): ChatMessage {
     return ChatMessage(
         id = UUID.randomUUID().toString(),
         role = role,
         content = content,
-        createdAt = System.currentTimeMillis().toString()
+        createdAt = System.currentTimeMillis().toString(),
+        attachments = attachments
     )
 }
 
@@ -74,7 +81,7 @@ private fun deriveTitle(text: String): String {
     return if (trimmed.length > 40) trimmed.take(40) + "..." else trimmed
 }
 
-private fun summarizeForAi(results: List<com.fsstructurecreator.data.FsOperationResult>): String {
+private fun summarizeForAi(results: List<FsOperationResult>): String {
     val lines = mutableListOf<String>()
     for (r in results) {
         for (d in r.createdDirectories) lines.add("Created directory: ${d}")
@@ -120,6 +127,10 @@ fun ChatScreen(
     var pendingAttachments by remember { mutableStateOf<List<Attachment>>(emptyList()) }
     var pendingFsRequest by remember { mutableStateOf<FsRequest?>(null) }
     val listState = rememberLazyListState()
+
+    fun removeAttachment(attachment: Attachment) {
+        pendingAttachments = pendingAttachments.filter { it != attachment }
+    }
 
     fun refreshConversations() {
         conversations = if (searchQuery.isBlank()) conversationStore.listConversations()
@@ -178,19 +189,52 @@ fun ChatScreen(
             val content = context.contentResolver.openInputStream(uri)?.bufferedReader()?.readText() ?: ""
             Attachment(name, kind, content)
         }
-        pendingAttachments = pendingAttachments + newOnes
+        val room = 20 - pendingAttachments.size
+        pendingAttachments = pendingAttachments + newOnes.take(room.coerceAtLeast(0))
+    }
+
+    // Shared by handleSend/handleRetry/handleEditSave: runs one AI turn
+    // against the given prior history, executing a filesystem request
+    // if the AI proposed one and a destination folder is already
+    // saved. Returns the text for the resulting assistant message.
+    // If a folder still needs to be picked, returns the AI's initial
+    // reply text and leaves pendingFsRequest set -- the folder-picker
+    // callback above completes the turn separately once a folder is
+    // chosen, same pattern the original single-message send flow used.
+    suspend fun runTurn(
+        historyBeforeThisTurn: List<ChatMessage>,
+        userText: String,
+        attachments: List<Attachment>
+    ): String {
+        val turn = geminiClient.sendTurn(historyBeforeThisTurn, userText, attachments)
+
+        if (turn.fsRequest == null) return turn.replyText
+
+        val savedFolder = currentlyValidFolderUri(context, prefs)
+        if (savedFolder == null) {
+            pendingFsRequest = turn.fsRequest
+            folderPickerLauncher.launch(null)
+            return turn.replyText
+        }
+
+        val resolvedOps = turn.fsRequest.operations.map { op ->
+            op.copy(rootPath = if (op.rootPath == "SELECTED_FOLDER") savedFolder else op.rootPath)
+        }
+        val results = resolvedOps.map { fsEngine.executeOperation(it) }
+        val summary = summarizeForAi(results)
+
+        val followUpHistory = historyBeforeThisTurn +
+            newMessage(MessageRole.USER, userText, attachments) +
+            newMessage(MessageRole.ASSISTANT, turn.replyText)
+        val followUp = geminiClient.sendTurn(followUpHistory, summary, emptyList())
+        return followUp.replyText
     }
 
     fun handleSend(text: String) {
         val convo = conversation ?: return
         if (sending) return
 
-        val displayText = if (pendingAttachments.isNotEmpty()) {
-            text + (if (text.isNotEmpty()) "\n" else "") +
-                "[Attached: ${pendingAttachments.joinToString(", ") { it.name }}]"
-        } else text
-
-        val userMsg = newMessage(MessageRole.USER, displayText)
+        val userMsg = newMessage(MessageRole.USER, text, pendingAttachments)
         val historyBefore = convo.messages
         val isFirst = convo.messages.isEmpty()
 
@@ -206,34 +250,7 @@ fun ChatScreen(
 
         scope.launch {
             try {
-                val turn = geminiClient.sendTurn(historyBefore, text, attachmentsForSend)
-                var assistantText = turn.replyText
-
-                if (turn.fsRequest != null) {
-                    val savedFolder = currentlyValidFolderUri(context, prefs)
-                    if (savedFolder == null) {
-                        pendingFsRequest = turn.fsRequest
-                        folderPickerLauncher.launch(null)
-                        sending = false
-                        val askMsg = newMessage(MessageRole.ASSISTANT, turn.replyText)
-                        working = working.copy(messages = working.messages + askMsg)
-                        conversation = working
-                        conversationStore.saveConversation(working)
-                        refreshConversations()
-                        return@launch
-                    }
-
-                    val resolvedOps = turn.fsRequest.operations.map { op ->
-                        op.copy(rootPath = if (op.rootPath == "SELECTED_FOLDER") savedFolder else op.rootPath)
-                    }
-                    val results = resolvedOps.map { fsEngine.executeOperation(it) }
-                    val summary = summarizeForAi(results)
-
-                    val followUpHistory = historyBefore + userMsg + newMessage(MessageRole.ASSISTANT, turn.replyText)
-                    val followUp = geminiClient.sendTurn(followUpHistory, summary, emptyList())
-                    assistantText = followUp.replyText
-                }
-
+                val assistantText = runTurn(historyBefore, text, attachmentsForSend)
                 val assistantMsg = newMessage(MessageRole.ASSISTANT, assistantText)
                 working = working.copy(
                     messages = working.messages + assistantMsg,
@@ -251,6 +268,108 @@ fun ChatScreen(
                 sending = false
             }
         }
+    }
+
+    // Retry: regenerates the AI half of the LATEST turn in place --
+    // no new user message, no extra turn. The last message must be
+    // the assistant reply of that turn; the one before it is the
+    // user prompt being retried.
+    fun handleRetry(assistantMessageId: String) {
+        val convo = conversation ?: return
+        if (sending) return
+        val messages = convo.messages
+        val assistantIndex = messages.indexOfLast { it.id == assistantMessageId }
+        if (assistantIndex <= 0) return
+        val userMsg = messages[assistantIndex - 1]
+        if (userMsg.role != MessageRole.USER) return
+
+        val historyBefore = messages.take(assistantIndex - 1)
+        sending = true
+
+        scope.launch {
+            try {
+                val assistantText = runTurn(historyBefore, userMsg.content, userMsg.attachments)
+                val newAssistantMsg = newMessage(MessageRole.ASSISTANT, assistantText)
+                val updated = convo.copy(
+                    messages = messages.take(assistantIndex) + newAssistantMsg,
+                    updatedAt = System.currentTimeMillis().toString()
+                )
+                conversation = updated
+                conversationStore.saveConversation(updated)
+            } catch (e: Exception) {
+                // Leave the old response in place on failure rather
+                // than silently losing it.
+            } finally {
+                sending = false
+            }
+        }
+    }
+
+    // Edit -> Save: replaces the LATEST prompt's text in place,
+    // discards every turn after it (there should be at most the one
+    // old assistant reply, since Edit is only offered on the latest
+    // prompt), and regenerates -- one turn, not two.
+    fun handleEditSave(userMessageId: String, newText: String) {
+        val convo = conversation ?: return
+        if (sending || newText.isBlank()) return
+        val messages = convo.messages
+        val userIndex = messages.indexOfLast { it.id == userMessageId }
+        if (userIndex < 0) return
+        val original = messages[userIndex]
+        if (original.role != MessageRole.USER) return
+
+        val historyBefore = messages.take(userIndex)
+        val editedUserMsg = original.copy(content = newText)
+
+        var working = convo.copy(
+            messages = historyBefore + editedUserMsg,
+            updatedAt = System.currentTimeMillis().toString()
+        )
+        conversation = working
+        sending = true
+
+        scope.launch {
+            try {
+                val assistantText = runTurn(historyBefore, newText, original.attachments)
+                val assistantMsg = newMessage(MessageRole.ASSISTANT, assistantText)
+                working = working.copy(
+                    messages = working.messages + assistantMsg,
+                    updatedAt = System.currentTimeMillis().toString()
+                )
+                conversation = working
+                conversationStore.saveConversation(working)
+                refreshConversations()
+            } catch (e: Exception) {
+                val errorMsg = newMessage(MessageRole.ASSISTANT, e.message ?: "Something went wrong.")
+                working = working.copy(messages = working.messages + errorMsg)
+                conversation = working
+                conversationStore.saveConversation(working)
+            } finally {
+                sending = false
+            }
+        }
+    }
+
+    fun handleLike(messageId: String) {
+        val convo = conversation ?: return
+        val updated = convo.copy(
+            messages = convo.messages.map {
+                if (it.id == messageId) it.copy(liked = !it.liked, disliked = false) else it
+            }
+        )
+        conversation = updated
+        conversationStore.saveConversation(updated)
+    }
+
+    fun handleDislike(messageId: String) {
+        val convo = conversation ?: return
+        val updated = convo.copy(
+            messages = convo.messages.map {
+                if (it.id == messageId) it.copy(disliked = !it.disliked, liked = false) else it
+            }
+        )
+        conversation = updated
+        conversationStore.saveConversation(updated)
     }
 
     LaunchedEffect(conversation?.messages?.size) {
@@ -296,6 +415,10 @@ fun ChatScreen(
                 }
             }
 
+            val messages = conversation?.messages ?: emptyList()
+            val latestUserId = messages.lastOrNull { it.role == MessageRole.USER }?.id
+            val latestAiId = messages.lastOrNull { it.role == MessageRole.ASSISTANT }?.id
+
             LazyColumn(
                 state = listState,
                 modifier = Modifier
@@ -303,8 +426,16 @@ fun ChatScreen(
                     .weight(1f)
                     .padding(horizontal = 12.dp)
             ) {
-                items(conversation?.messages ?: emptyList()) { msg ->
-                    MessageBubble(msg)
+                items(messages, key = { it.id }) { msg ->
+                    MessageBubble(
+                        message = msg,
+                        isLatestUserMessage = msg.id == latestUserId,
+                        isLatestAiMessage = msg.id == latestAiId,
+                        onLike = { handleLike(msg.id) },
+                        onDislike = { handleDislike(msg.id) },
+                        onRetry = { handleRetry(msg.id) },
+                        onSaveEdit = { newText -> handleEditSave(msg.id, newText) }
+                    )
                 }
             }
 
@@ -312,6 +443,7 @@ fun ChatScreen(
                 enabled = !sending,
                 onAttachClick = { attachLauncher.launch(arrayOf("text/plain", "text/markdown")) },
                 pendingAttachments = pendingAttachments,
+                onRemoveAttachment = { removeAttachment(it) },
                 onSend = { handleSend(it) }
             )
         }
