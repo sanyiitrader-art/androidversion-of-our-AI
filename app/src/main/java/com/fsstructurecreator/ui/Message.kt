@@ -251,6 +251,7 @@ private fun AiMessage(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AttachmentIndicator(count: Int, onClick: () -> Unit) {
     Surface(

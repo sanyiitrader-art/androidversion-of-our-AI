@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -193,14 +192,6 @@ fun ChatScreen(
         pendingAttachments = pendingAttachments + newOnes.take(room.coerceAtLeast(0))
     }
 
-    // Shared by handleSend/handleRetry/handleEditSave: runs one AI turn
-    // against the given prior history, executing a filesystem request
-    // if the AI proposed one and a destination folder is already
-    // saved. Returns the text for the resulting assistant message.
-    // If a folder still needs to be picked, returns the AI's initial
-    // reply text and leaves pendingFsRequest set -- the folder-picker
-    // callback above completes the turn separately once a folder is
-    // chosen, same pattern the original single-message send flow used.
     suspend fun runTurn(
         historyBeforeThisTurn: List<ChatMessage>,
         userText: String,
@@ -270,10 +261,6 @@ fun ChatScreen(
         }
     }
 
-    // Retry: regenerates the AI half of the LATEST turn in place --
-    // no new user message, no extra turn. The last message must be
-    // the assistant reply of that turn; the one before it is the
-    // user prompt being retried.
     fun handleRetry(assistantMessageId: String) {
         val convo = conversation ?: return
         if (sending) return
@@ -305,10 +292,6 @@ fun ChatScreen(
         }
     }
 
-    // Edit -> Save: replaces the LATEST prompt's text in place,
-    // discards every turn after it (there should be at most the one
-    // old assistant reply, since Edit is only offered on the latest
-    // prompt), and regenerates -- one turn, not two.
     fun handleEditSave(userMessageId: String, newText: String) {
         val convo = conversation ?: return
         if (sending || newText.isBlank()) return
