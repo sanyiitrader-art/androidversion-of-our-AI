@@ -2,6 +2,7 @@ package com.fsstructurecreator.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,10 +15,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AttachFile
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ThumbDown
@@ -40,7 +39,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
@@ -83,7 +82,6 @@ fun MessageBubble(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun UserMessage(
     message: ChatMessage,
@@ -97,10 +95,7 @@ private fun UserMessage(
     var editText by remember(message.id) { mutableStateOf(message.content) }
     var showAttachmentsDialog by remember { mutableStateOf(false) }
 
-    Column(
-        horizontalAlignment = Alignment.End,
-        modifier = Modifier.fillMaxWidth()
-    ) {
+    Column(horizontalAlignment = Alignment.End, modifier = Modifier.fillMaxWidth()) {
         if (message.attachments.isNotEmpty()) {
             AttachmentIndicator(
                 count = message.attachments.size,
@@ -109,10 +104,7 @@ private fun UserMessage(
         }
 
         if (isEditing) {
-            Column(
-                horizontalAlignment = Alignment.End,
-                modifier = Modifier.widthIn(max = 280.dp)
-            ) {
+            Column(horizontalAlignment = Alignment.End, modifier = Modifier.widthIn(max = 280.dp)) {
                 OutlinedTextField(
                     value = editText,
                     onValueChange = { editText = it },
@@ -124,25 +116,17 @@ private fun UserMessage(
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
-
-                Row(
-                    modifier = Modifier.padding(top = 4.dp)
-                ) {
-                    TextButton(
-                        onClick = {
-                            editText = message.content
-                            isEditing = false
-                        }
-                    ) {
+                Row(modifier = Modifier.padding(top = 4.dp)) {
+                    TextButton(onClick = {
+                        editText = message.content
+                        isEditing = false
+                    }) {
                         Text("Discard", color = TextSecondary)
                     }
-
-                    TextButton(
-                        onClick = {
-                            isEditing = false
-                            onSaveEdit(editText.trim())
-                        }
-                    ) {
+                    TextButton(onClick = {
+                        isEditing = false
+                        onSaveEdit(editText.trim())
+                    }) {
                         Text("Save", color = Mint)
                     }
                 }
@@ -182,10 +166,7 @@ private fun UserMessage(
                             color = TextPrimary,
                             style = MaterialTheme.typography.bodyMedium,
                             overflow = TextOverflow.Clip,
-                            modifier = Modifier.padding(
-                                horizontal = 14.dp,
-                                vertical = 10.dp
-                            )
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
                         )
                     }
 
@@ -195,31 +176,14 @@ private fun UserMessage(
                         offset = menuOffset
                     ) {
                         DropdownMenuItem(
-                            text = {
-                                Text(
-                                    "Copy",
-                                    color = TextPrimary
-                                )
-                            },
+                            text = { Text("Copy", color = TextPrimary) },
                             onClick = {
                                 showMenu = false
-                                clipboard.setText(
-                                    AnnotatedString(message.content)
-                                )
+                                clipboard.setText(AnnotatedString(message.content))
                             }
                         )
-
                         DropdownMenuItem(
-                            text = {
-                                Text(
-                                    "Edit",
-                                    color = if (isLatest) {
-                                        TextPrimary
-                                    } else {
-                                        TextTertiary
-                                    }
-                                )
-                            },
+                            text = { Text("Edit", color = if (isLatest) TextPrimary else TextTertiary) },
                             enabled = isLatest,
                             onClick = {
                                 showMenu = false
@@ -250,11 +214,7 @@ private fun AiMessage(
     onDislike: () -> Unit,
     onRetry: () -> Unit
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp)
-    ) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Text(
             text = message.content,
             color = TextPrimary,
@@ -266,59 +226,30 @@ private fun AiMessage(
 
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(
-                start = 4.dp,
-                top = 4.dp
-            )
+            modifier = Modifier.padding(start = 4.dp, top = 4.dp)
         ) {
             IconButton(
-                onClick = {
-                    clipboard.setText(
-                        AnnotatedString(message.content)
-                    )
-                },
+                onClick = { clipboard.setText(AnnotatedString(message.content)) },
                 modifier = Modifier.size(28.dp)
             ) {
-                Icon(
-                    Icons.Filled.ContentCopy,
-                    contentDescription = "Copy",
-                    tint = TextSecondary,
-                    modifier = Modifier.size(15.dp)
-                )
+                Icon(Icons.Filled.ContentCopy, contentDescription = "Copy", tint = TextSecondary, modifier = Modifier.size(15.dp))
             }
-
-            IconButton(
-                onClick = onLike,
-                modifier = Modifier.size(28.dp)
-            ) {
+            IconButton(onClick = onLike, modifier = Modifier.size(28.dp)) {
                 Icon(
                     Icons.Filled.ThumbUp,
                     contentDescription = "Like",
-                    tint = if (message.liked) {
-                        Mint
-                    } else {
-                        TextSecondary
-                    },
+                    tint = if (message.liked) Mint else TextSecondary,
                     modifier = Modifier.size(15.dp)
                 )
             }
-
-            IconButton(
-                onClick = onDislike,
-                modifier = Modifier.size(28.dp)
-            ) {
+            IconButton(onClick = onDislike, modifier = Modifier.size(28.dp)) {
                 Icon(
                     Icons.Filled.ThumbDown,
                     contentDescription = "Dislike",
-                    tint = if (message.disliked) {
-                        Mint
-                    } else {
-                        TextSecondary
-                    },
+                    tint = if (message.disliked) Mint else TextSecondary,
                     modifier = Modifier.size(15.dp)
                 )
             }
-
             IconButton(
                 onClick = onRetry,
                 enabled = isLatest,
@@ -327,11 +258,7 @@ private fun AiMessage(
                 Icon(
                     Icons.Filled.Refresh,
                     contentDescription = "Retry",
-                    tint = if (isLatest) {
-                        TextSecondary
-                    } else {
-                        TextTertiary
-                    },
+                    tint = if (isLatest) TextSecondary else TextTertiary,
                     modifier = Modifier.size(15.dp)
                 )
             }
@@ -341,10 +268,7 @@ private fun AiMessage(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun AttachmentIndicator(
-    count: Int,
-    onClick: () -> Unit
-) {
+private fun AttachmentIndicator(count: Int, onClick: () -> Unit) {
     Surface(
         color = CharcoalInput,
         shape = RoundedCornerShape(8.dp),
@@ -354,18 +278,9 @@ private fun AttachmentIndicator(
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(
-                horizontal = 10.dp,
-                vertical = 6.dp
-            )
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
         ) {
-            Icon(
-                Icons.Filled.AttachFile,
-                contentDescription = null,
-                tint = TextSecondary,
-                modifier = Modifier.size(14.dp)
-            )
-
+            Icon(Icons.Filled.AttachFile, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(14.dp))
             Text(
                 text = "$count attached file${if (count == 1) "" else "s"}",
                 color = TextSecondary,
@@ -376,23 +291,13 @@ private fun AttachmentIndicator(
 }
 
 @Composable
-private fun AttachmentListDialog(
-    attachments: List<Attachment>,
-    onDismiss: () -> Unit
-) {
+private fun AttachmentListDialog(attachments: List<Attachment>, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = CharcoalElevated,
-        title = {
-            Text(
-                "Attachments",
-                color = TextPrimary
-            )
-        },
+        title = { Text("Attachments", color = TextPrimary) },
         text = {
-            LazyColumn(
-                modifier = Modifier.widthIn(max = 280.dp)
-            ) {
+            LazyColumn(modifier = Modifier.widthIn(max = 280.dp)) {
                 items(attachments) { attachment ->
                     Text(
                         text = attachment.name,
@@ -408,10 +313,7 @@ private fun AttachmentListDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text(
-                    "Close",
-                    color = Mint
-                )
+                Text("Close", color = Mint)
             }
         }
     )
