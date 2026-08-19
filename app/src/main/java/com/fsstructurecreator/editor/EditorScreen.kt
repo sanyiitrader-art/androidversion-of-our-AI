@@ -51,6 +51,7 @@ import com.fsstructurecreator.ui.TextPrimary
 import com.fsstructurecreator.ui.TextSecondary
 import com.fsstructurecreator.ui.TextTertiary
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -78,6 +79,15 @@ fun EditorScreen(
     var searchMode by remember { mutableStateOf(WorkspaceSearchMode.FILE_NAME) }
     var highlightRequest by remember { mutableStateOf<TextSearchResult?>(null) }
 
+    // Only one tree-refresh may be in flight at a time. Every prior
+    // request is explicitly cancelled before starting a new one, so
+    // out-of-order completion (e.g. from rapid repeated taps on the
+    // Explorer button, or a resume-refresh overlapping a click-refresh)
+    // can never let a stale/incomplete SAF read win over a fresher one
+    // -- this is what previously caused the Explorer to sometimes open
+    // empty despite the folder actually having content.
+    var refreshJob by remember { mutableStateOf<Job?>(null) }
+
     fun updateNode(node: WorkspaceNode, targetUri: String, transform: (WorkspaceNode) -> WorkspaceNode): WorkspaceNode {
         if (node.uri == targetUri) return transform(node)
         if (node.children.isEmpty()) return node
@@ -87,17 +97,6 @@ fun EditorScreen(
     suspend fun refreshTree(preserveExpansion: Boolean = true) {
         val root = session.workspaceRoot ?: return
         val newTree = withContext(Dispatchers.IO) { store.loadTree(root) } ?: return
-        // Guard against a stale/incomplete SAF listing racing with a
-        // recent write (e.g. right after typing with Auto Save on) --
-        // if the freshly loaded tree suddenly has no children while
-        // the previously loaded tree for this same root had some,
-        // treat it as a transient read glitch and keep what we
-        // already have rather than replacing a good tree with an
-        // empty one.
-        val previous = session.tree
-        if (newTree.children.isEmpty() && previous != null && previous.uri == root && previous.children.isNotEmpty()) {
-            return
-        }
         if (!preserveExpansion || session.tree == null) {
             session.tree = newTree
             return
@@ -115,7 +114,12 @@ fun EditorScreen(
         session.tree = applyExpansion(newTree)
     }
 
-    val currentRefresh = rememberUpdatedState { scope.launch { refreshTree() } }
+    fun triggerRefresh() {
+        refreshJob?.cancel()
+        refreshJob = scope.launch { refreshTree() }
+    }
+
+    val currentRefresh = rememberUpdatedState { triggerRefresh() }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -242,7 +246,7 @@ fun EditorScreen(
                     if (session.selectedUri == edit.existingUri) {
                         session.selectedUri = newUri
                     }
-                    refreshTree()
+                    triggerRefresh()
                 }
                 WorkspaceStore.RenameResult.DuplicateName -> {
                     inlineEdit = edit.copy(error = CreationErrorState.DUPLICATE_NAME)
@@ -262,7 +266,7 @@ fun EditorScreen(
         when (result) {
             is WorkspaceStore.CreateResult.Success -> {
                 inlineEdit = null
-                refreshTree()
+                triggerRefresh()
                 session.selectedUri = result.uri
             }
             WorkspaceStore.CreateResult.DuplicateName -> {
@@ -296,7 +300,7 @@ fun EditorScreen(
         if (session.selectedUri != null && isUnderOrEqual(session.selectedUri!!, node)) {
             session.selectedUri = node.parentUri
         }
-        refreshTree()
+        triggerRefresh()
     }
 
     fun onContentChange(newContent: String) {
@@ -386,8 +390,8 @@ fun EditorScreen(
                 onMenuClick = { menuOpen = true },
                 onExplorerClick = {
                     if (session.workspaceRoot != null) {
-                        scope.launch { refreshTree() }
                         explorerOpen = true
+                        triggerRefresh()
                     }
                 }
             )

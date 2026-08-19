@@ -43,9 +43,12 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.fsstructurecreator.data.Attachment
 import com.fsstructurecreator.data.ChatMessage
 import com.fsstructurecreator.data.MessageRole
@@ -215,14 +218,7 @@ private fun AiMessage(
     onRetry: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        Text(
-            text = message.content,
-            color = TextPrimary,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier
-                .fillMaxWidth(0.9f)
-                .padding(horizontal = 4.dp)
-        )
+        FormattedText(message.content)
 
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -262,6 +258,102 @@ private fun AiMessage(
                     modifier = Modifier.size(15.dp)
                 )
             }
+        }
+    }
+}
+
+/** Minimal markdown-style renderer for AI responses: fenced code
+ *  blocks get a monospace box, "#"/"##"/"###" headings, "-"/"*"
+ *  lists, everything else as paragraphs. Not a full markdown parser
+ *  -- just enough to stop code blocks from rendering as plain text
+ *  with literal backtick fences, which is what was happening before. */
+@Composable
+private fun FormattedText(text: String) {
+    val lines = text.split("\n")
+    var i = 0
+
+    Column(modifier = Modifier.fillMaxWidth(0.9f).padding(horizontal = 4.dp)) {
+        while (i < lines.size) {
+            val line = lines[i]
+
+            if (line.trim().startsWith("```")) {
+                val codeLines = mutableListOf<String>()
+                i++
+                while (i < lines.size && !lines[i].trim().startsWith("```")) {
+                    codeLines.add(lines[i])
+                    i++
+                }
+                if (i < lines.size) i++ // skip closing fence
+                Surface(
+                    color = CharcoalInput,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                ) {
+                    Text(
+                        text = codeLines.joinToString("\n"),
+                        color = TextPrimary,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.5.sp,
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
+                continue
+            }
+
+            val headingMatch = Regex("^(#{1,3})\\s+(.*)$").find(line)
+            if (headingMatch != null) {
+                val level = headingMatch.groupValues[1].length
+                Text(
+                    text = headingMatch.groupValues[2],
+                    color = Mint,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = (17 - level).sp,
+                    modifier = Modifier.padding(top = 6.dp, bottom = 2.dp)
+                )
+                i++
+                continue
+            }
+
+            if (line.trim().startsWith("- ") || line.trim().startsWith("* ")) {
+                val items = mutableListOf<String>()
+                while (i < lines.size && (lines[i].trim().startsWith("- ") || lines[i].trim().startsWith("* "))) {
+                    items.add(lines[i].trim().removePrefix("- ").removePrefix("* "))
+                    i++
+                }
+                Column(modifier = Modifier.padding(start = 4.dp, top = 2.dp, bottom = 2.dp)) {
+                    items.forEach { item ->
+                        Row {
+                            Text("•  ", color = TextPrimary)
+                            Text(item, color = TextPrimary)
+                        }
+                    }
+                }
+                continue
+            }
+
+            if (line.isBlank()) {
+                i++
+                continue
+            }
+
+            val paraLines = mutableListOf<String>()
+            while (
+                i < lines.size &&
+                lines[i].isNotBlank() &&
+                !lines[i].trim().startsWith("```") &&
+                !(lines[i].trim().startsWith("- ") || lines[i].trim().startsWith("* ")) &&
+                !Regex("^#{1,3}\\s+").containsMatchIn(lines[i])
+            ) {
+                paraLines.add(lines[i])
+                i++
+            }
+            Text(
+                text = paraLines.joinToString("\n"),
+                color = TextPrimary,
+                modifier = Modifier.padding(vertical = 2.dp)
+            )
         }
     }
 }
