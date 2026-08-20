@@ -90,17 +90,6 @@ fun EditorScreen(
         val root = session.workspaceRoot ?: return
         val newTree = withContext(Dispatchers.IO) { store.loadTree(root) } ?: return
 
-        // Guard against a stale/incomplete SAF listing racing with a
-        // recent write (e.g. right after typing with Auto Save on, or
-        // right after the app resumes from background) -- if the
-        // freshly loaded tree suddenly has no children while the
-        // previously loaded tree for this same root had some, treat
-        // it as a transient read glitch and keep what we already
-        // have rather than replacing a good tree with an empty one.
-        // (Restored here -- this guard existed before but was
-        // dropped during a later rewrite of this function; that
-        // omission was the actual cause of the Explorer sometimes
-        // opening completely empty.)
         val previous = session.tree
         if (newTree.children.isEmpty() && previous != null && previous.uri == root && previous.children.isNotEmpty()) {
             return
@@ -382,11 +371,19 @@ fun EditorScreen(
     Box(modifier = Modifier.fillMaxSize().background(CharcoalBg)) {
         Row(modifier = Modifier.fillMaxSize()) {
             EditorRail(
+                explorerOpen = explorerOpen,
                 onMenuClick = { menuOpen = true },
                 onExplorerClick = {
+                    // No longer gated on tree != null anywhere in this
+                    // path -- explorerOpen flips immediately and the
+                    // panel now shows its own "Loading..." state if the
+                    // tree isn't ready yet, instead of the panel's
+                    // visibility itself silently depending on tree being
+                    // non-null (a real, if unconfirmed, way a genuine
+                    // click could previously render nothing at all).
                     if (session.workspaceRoot != null) {
-                        explorerOpen = true
-                        triggerRefresh()
+                        explorerOpen = !explorerOpen
+                        if (explorerOpen) triggerRefresh()
                     }
                 }
             )
@@ -395,13 +392,6 @@ fun EditorScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .weight(1f)
-                    // Swipe-to-AI gesture scoped to just the main
-                    // content column now, instead of the whole
-                    // screen -- previously it lived on the outer Box,
-                    // which meant the EditorRail's own buttons shared
-                    // the same hit-test/gesture region as the drag
-                    // detector, a likely contributor to taps on the
-                    // Explorer button sometimes not registering.
                     .pointerInput(Unit) {
                         var totalDrag = 0f
                         detectHorizontalDragGestures(
@@ -456,8 +446,11 @@ fun EditorScreen(
             }
         }
 
+        // "visible" now depends ONLY on explorerOpen -- tree readiness
+        // is handled inside ExplorerSidebar itself (loading state),
+        // never as a silent gate on whether the panel appears at all.
         ExplorerSidebar(
-            visible = explorerOpen && session.tree != null,
+            visible = explorerOpen,
             tree = session.tree,
             selectedUri = session.selectedUri,
             onToggleExpand = { toggleExpand(it) },
@@ -489,6 +482,7 @@ fun EditorScreen(
 
 @Composable
 private fun EditorRail(
+    explorerOpen: Boolean,
     onMenuClick: () -> Unit,
     onExplorerClick: () -> Unit
 ) {
@@ -504,8 +498,18 @@ private fun EditorRail(
         IconButton(onClick = onMenuClick) {
             Icon(Icons.Filled.Menu, contentDescription = "Menu", tint = TextPrimary)
         }
+        // Tint now reflects explorerOpen directly -- a deliberate,
+        // permanent diagnostic: if this icon turns mint on tap, the
+        // click IS registering and the remaining problem is purely
+        // about what renders after. If it never changes color, the
+        // tap isn't reaching this button at all, which points to a
+        // completely different (and more specific) cause to chase.
         IconButton(onClick = onExplorerClick) {
-            Icon(Icons.Filled.InsertDriveFile, contentDescription = "Explorer", tint = TextPrimary)
+            Icon(
+                Icons.Filled.InsertDriveFile,
+                contentDescription = "Explorer",
+                tint = if (explorerOpen) Mint else TextPrimary
+            )
         }
         Spacer(modifier = Modifier.weight(1f))
         IconButton(onClick = { /* undefined per spec section 42 -- intentionally inert */ }) {
