@@ -11,6 +11,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -101,6 +102,20 @@ fun ExplorerSidebar(
                     .fillMaxHeight()
                     .fillMaxWidth(0.9f)
                     .background(CharcoalElevated)
+                    // No-op tap absorber over the ENTIRE panel area --
+                    // without this, any blank space inside the panel
+                    // (e.g. the toolbar row's empty left portion, which
+                    // sits directly above the rail's Menu button) had
+                    // no pointer-input handler of its own, so Compose
+                    // let those taps fall straight through to whatever
+                    // was rendered underneath. Individual buttons/rows
+                    // inside the panel still get first claim on their
+                    // own bounds (Compose gives nested clickables
+                    // priority), so this only catches the gaps.
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() }
+                    ) { /* absorb; blank panel space should do nothing */ }
                     .padding(10.dp)
             ) {
                 Row(
@@ -117,11 +132,6 @@ fun ExplorerSidebar(
                 }
 
                 if (tree == null) {
-                    // Panel is now genuinely visible in this state
-                    // (instead of not rendering at all) -- if you see
-                    // this text, the button click DID register and DID
-                    // open the panel; it's just still waiting on the
-                    // first tree load to finish.
                     Text(
                         "Loading...",
                         color = TextSecondary,

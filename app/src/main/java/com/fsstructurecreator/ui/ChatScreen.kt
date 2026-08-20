@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -74,6 +75,21 @@ private fun newMessage(
     )
 }
 
+/** Purely in-memory, never touches disk -- a conversation is only
+ *  ever persisted once it actually has a message in it (see
+ *  handleSend/handleRetry/handleEditSave below, which all only save
+ *  after a real message exists). This is what stops "New Chat" /
+ *  returning from the editor / app launch from silently littering the
+ *  sidebar with empty conversations. */
+private fun newEmptyConversation(): Conversation {
+    return Conversation(
+        id = UUID.randomUUID().toString(),
+        title = "New chat",
+        messages = emptyList(),
+        updatedAt = System.currentTimeMillis().toString()
+    )
+}
+
 private fun deriveTitle(text: String): String {
     val trimmed = text.trim()
     if (trimmed.isEmpty()) return "New chat"
@@ -105,6 +121,7 @@ private fun currentlyValidFolderUri(context: Context, prefs: android.content.Sha
 
 @Composable
 fun ChatScreen(
+    session: ChatSessionState,
     onOpenEditor: () -> Unit,
     onSwipeToEditor: () -> Unit
 ) {
@@ -117,7 +134,6 @@ fun ChatScreen(
     val fsEngine = remember { FilesystemEngine(context) }
     val prefs = remember { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
 
-    var conversation by remember { mutableStateOf<Conversation?>(null) }
     var conversations by remember { mutableStateOf<List<ConversationSummary>>(emptyList()) }
     var searchQuery by remember { mutableStateOf("") }
     var sidebarOpen by remember { mutableStateOf(false) }
@@ -136,16 +152,24 @@ fun ChatScreen(
         else conversationStore.searchConversations(searchQuery)
     }
 
+    // Only creates a fresh (unsaved) conversation on a genuine first
+    // launch (session.conversation == null, i.e. process just
+    // started). Returning here after switching to the editor and back
+    // finds session.conversation already set and does NOT touch it --
+    // this is what actually fixes the "chat resets" bug, since
+    // session survives the screen switch (see MainActivity.kt).
     LaunchedEffect(Unit) {
-        conversation = conversationStore.createConversation()
+        if (session.conversation == null) {
+            session.conversation = newEmptyConversation()
+        }
         refreshConversations()
     }
     LaunchedEffect(searchQuery) { refreshConversations() }
 
     fun handleDeleteConversation(id: String) {
         conversationStore.deleteConversation(id)
-        if (conversation?.id == id) {
-            conversation = conversationStore.createConversation()
+        if (session.conversation?.id == id) {
+            session.conversation = newEmptyConversation()
         }
         refreshConversations()
     }
@@ -167,8 +191,8 @@ fun ChatScreen(
                 scope.launch {
                     executeAndRespond(
                         request, uri.toString(), fsEngine, geminiClient,
-                        conversation, conversationStore
-                    ) { conversation = it }
+                        session.conversation, conversationStore
+                    ) { session.conversation = it }
                 }
             }
         }
@@ -222,7 +246,7 @@ fun ChatScreen(
     }
 
     fun handleSend(text: String) {
-        val convo = conversation ?: return
+        val convo = session.conversation ?: return
         if (sending) return
 
         val userMsg = newMessage(MessageRole.USER, text, pendingAttachments)
@@ -234,7 +258,7 @@ fun ChatScreen(
             messages = convo.messages + userMsg,
             updatedAt = System.currentTimeMillis().toString()
         )
-        conversation = working
+        session.conversation = working
         val attachmentsForSend = pendingAttachments
         pendingAttachments = emptyList()
         sending = true
@@ -247,13 +271,13 @@ fun ChatScreen(
                     messages = working.messages + assistantMsg,
                     updatedAt = System.currentTimeMillis().toString()
                 )
-                conversation = working
+                session.conversation = working
                 conversationStore.saveConversation(working)
                 refreshConversations()
             } catch (e: Exception) {
                 val errorMsg = newMessage(MessageRole.ASSISTANT, e.message ?: "Something went wrong.")
                 working = working.copy(messages = working.messages + errorMsg)
-                conversation = working
+                session.conversation = working
                 conversationStore.saveConversation(working)
             } finally {
                 sending = false
@@ -262,7 +286,7 @@ fun ChatScreen(
     }
 
     fun handleRetry(assistantMessageId: String) {
-        val convo = conversation ?: return
+        val convo = session.conversation ?: return
         if (sending) return
         val messages = convo.messages
         val assistantIndex = messages.indexOfLast { it.id == assistantMessageId }
@@ -281,11 +305,10 @@ fun ChatScreen(
                     messages = messages.take(assistantIndex) + newAssistantMsg,
                     updatedAt = System.currentTimeMillis().toString()
                 )
-                conversation = updated
+                session.conversation = updated
                 conversationStore.saveConversation(updated)
             } catch (e: Exception) {
-                // Leave the old response in place on failure rather
-                // than silently losing it.
+                // Leave the old response in place on failure.
             } finally {
                 sending = false
             }
@@ -293,7 +316,7 @@ fun ChatScreen(
     }
 
     fun handleEditSave(userMessageId: String, newText: String) {
-        val convo = conversation ?: return
+        val convo = session.conversation ?: return
         if (sending || newText.isBlank()) return
         val messages = convo.messages
         val userIndex = messages.indexOfLast { it.id == userMessageId }
@@ -308,7 +331,7 @@ fun ChatScreen(
             messages = historyBefore + editedUserMsg,
             updatedAt = System.currentTimeMillis().toString()
         )
-        conversation = working
+        session.conversation = working
         sending = true
 
         scope.launch {
@@ -319,13 +342,13 @@ fun ChatScreen(
                     messages = working.messages + assistantMsg,
                     updatedAt = System.currentTimeMillis().toString()
                 )
-                conversation = working
+                session.conversation = working
                 conversationStore.saveConversation(working)
                 refreshConversations()
             } catch (e: Exception) {
                 val errorMsg = newMessage(MessageRole.ASSISTANT, e.message ?: "Something went wrong.")
                 working = working.copy(messages = working.messages + errorMsg)
-                conversation = working
+                session.conversation = working
                 conversationStore.saveConversation(working)
             } finally {
                 sending = false
@@ -334,29 +357,29 @@ fun ChatScreen(
     }
 
     fun handleLike(messageId: String) {
-        val convo = conversation ?: return
+        val convo = session.conversation ?: return
         val updated = convo.copy(
             messages = convo.messages.map {
                 if (it.id == messageId) it.copy(liked = !it.liked, disliked = false) else it
             }
         )
-        conversation = updated
+        session.conversation = updated
         conversationStore.saveConversation(updated)
     }
 
     fun handleDislike(messageId: String) {
-        val convo = conversation ?: return
+        val convo = session.conversation ?: return
         val updated = convo.copy(
             messages = convo.messages.map {
                 if (it.id == messageId) it.copy(disliked = !it.disliked, liked = false) else it
             }
         )
-        conversation = updated
+        session.conversation = updated
         conversationStore.saveConversation(updated)
     }
 
-    LaunchedEffect(conversation?.messages?.size) {
-        val size = conversation?.messages?.size ?: 0
+    LaunchedEffect(session.conversation?.messages?.size) {
+        val size = session.conversation?.messages?.size ?: 0
         if (size > 0) listState.animateScrollToItem(size - 1)
     }
 
@@ -398,7 +421,7 @@ fun ChatScreen(
                 }
             }
 
-            val messages = conversation?.messages ?: emptyList()
+            val messages = session.conversation?.messages ?: emptyList()
             val latestUserId = messages.lastOrNull { it.role == MessageRole.USER }?.id
             val latestAiId = messages.lastOrNull { it.role == MessageRole.ASSISTANT }?.id
 
@@ -438,15 +461,15 @@ fun ChatScreen(
         ) {
             Sidebar(
                 conversations = conversations,
-                activeConversationId = conversation?.id,
+                activeConversationId = session.conversation?.id,
                 searchQuery = searchQuery,
                 onSearchQueryChange = { searchQuery = it },
                 onSelectConversation = { id ->
-                    conversation = conversationStore.getConversation(id)
+                    session.conversation = conversationStore.getConversation(id)
                     sidebarOpen = false
                 },
                 onNewChat = {
-                    conversation = conversationStore.createConversation()
+                    session.conversation = newEmptyConversation()
                     refreshConversations()
                     sidebarOpen = false
                 },

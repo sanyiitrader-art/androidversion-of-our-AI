@@ -11,12 +11,25 @@ class ConversationStore(context: Context) {
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
     private val dir = File(context.filesDir, "conversations").apply { mkdirs() }
 
+    /** Lists saved conversations. As a side effect, any conversation
+     *  file found with zero messages is deleted -- a conversation is
+     *  only ever meant to be persisted once it has at least one
+     *  message (see saveConversation callers), so an empty file on
+     *  disk is stale garbage (either from before this rule existed,
+     *  or a rare edge case) and is cleaned up here rather than left
+     *  to accumulate and clutter the sidebar. */
     fun listConversations(): List<ConversationSummary> {
         return dir.listFiles { f -> f.extension == "json" }
             ?.mapNotNull { f ->
-                runCatching { json.decodeFromString<Conversation>(f.readText()) }
-                    .getOrNull()
-                    ?.let { ConversationSummary(it.id, it.title, it.updatedAt) }
+                val convo = runCatching { json.decodeFromString<Conversation>(f.readText()) }.getOrNull()
+                when {
+                    convo == null -> null
+                    convo.messages.isEmpty() -> {
+                        f.delete()
+                        null
+                    }
+                    else -> ConversationSummary(convo.id, convo.title, convo.updatedAt)
+                }
             }
             ?.sortedByDescending { it.updatedAt }
             ?: emptyList()

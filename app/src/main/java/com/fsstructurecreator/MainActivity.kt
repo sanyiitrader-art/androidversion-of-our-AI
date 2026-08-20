@@ -15,6 +15,7 @@ import com.fsstructurecreator.editor.EditorScreen
 import com.fsstructurecreator.editor.EditorSessionState
 import com.fsstructurecreator.ui.CharcoalBg
 import com.fsstructurecreator.ui.ChatScreen
+import com.fsstructurecreator.ui.ChatSessionState
 import com.fsstructurecreator.ui.FsStructureCreatorTheme
 
 private enum class TopLevelScreen { AI, EDITOR }
@@ -32,11 +33,11 @@ class MainActivity : ComponentActivity() {
 private fun App() {
     var screen by remember { mutableStateOf(TopLevelScreen.AI) }
 
-    // Created once here, at the app-session level, so it survives
-    // switching between the AI and editor screens -- it's only
-    // destroyed on a full app restart (spec: editor state must not
-    // reset just from navigating away and back).
+    // Both created once here, at the app-session level, so they
+    // survive switching between the AI and editor screens -- only
+    // destroyed on a full app/process restart.
     val editorSession = remember { EditorSessionState() }
+    val chatSession = remember { ChatSessionState() }
 
     FsStructureCreatorTheme {
         Surface(
@@ -45,6 +46,7 @@ private fun App() {
         ) {
             when (screen) {
                 TopLevelScreen.AI -> ChatScreen(
+                    session = chatSession,
                     onOpenEditor = { screen = TopLevelScreen.EDITOR },
                     onSwipeToEditor = { screen = TopLevelScreen.EDITOR }
                 )

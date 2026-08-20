@@ -40,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -72,6 +73,7 @@ fun EditorScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val store = remember { WorkspaceStore(context) }
+    val focusManager = LocalFocusManager.current
 
     var explorerOpen by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
@@ -374,16 +376,22 @@ fun EditorScreen(
                 explorerOpen = explorerOpen,
                 onMenuClick = { menuOpen = true },
                 onExplorerClick = {
-                    // No longer gated on tree != null anywhere in this
-                    // path -- explorerOpen flips immediately and the
-                    // panel now shows its own "Loading..." state if the
-                    // tree isn't ready yet, instead of the panel's
-                    // visibility itself silently depending on tree being
-                    // non-null (a real, if unconfirmed, way a genuine
-                    // click could previously render nothing at all).
                     if (session.workspaceRoot != null) {
                         explorerOpen = !explorerOpen
-                        if (explorerOpen) triggerRefresh()
+                        if (explorerOpen) {
+                            // Clears focus (and therefore dismisses any
+                            // active text-selection cursor handle /
+                            // floating toolbar) BEFORE the panel opens.
+                            // Android renders those handles as a
+                            // window-level overlay above normal app
+                            // content, so no amount of Compose z-
+                            // ordering on the panel itself can cover
+                            // them -- removing focus so there's simply
+                            // nothing active to bleed through is the
+                            // correct fix.
+                            focusManager.clearFocus(force = true)
+                            triggerRefresh()
+                        }
                     }
                 }
             )
@@ -446,9 +454,6 @@ fun EditorScreen(
             }
         }
 
-        // "visible" now depends ONLY on explorerOpen -- tree readiness
-        // is handled inside ExplorerSidebar itself (loading state),
-        // never as a silent gate on whether the panel appears at all.
         ExplorerSidebar(
             visible = explorerOpen,
             tree = session.tree,
@@ -498,12 +503,6 @@ private fun EditorRail(
         IconButton(onClick = onMenuClick) {
             Icon(Icons.Filled.Menu, contentDescription = "Menu", tint = TextPrimary)
         }
-        // Tint now reflects explorerOpen directly -- a deliberate,
-        // permanent diagnostic: if this icon turns mint on tap, the
-        // click IS registering and the remaining problem is purely
-        // about what renders after. If it never changes color, the
-        // tap isn't reaching this button at all, which points to a
-        // completely different (and more specific) cause to chase.
         IconButton(onClick = onExplorerClick) {
             Icon(
                 Icons.Filled.InsertDriveFile,
