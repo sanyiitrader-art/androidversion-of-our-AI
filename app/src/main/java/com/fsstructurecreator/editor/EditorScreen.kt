@@ -78,14 +78,6 @@ fun EditorScreen(
     var inlineEdit by remember { mutableStateOf<InlineEditState?>(null) }
     var searchMode by remember { mutableStateOf(WorkspaceSearchMode.FILE_NAME) }
     var highlightRequest by remember { mutableStateOf<TextSearchResult?>(null) }
-
-    // Only one tree-refresh may be in flight at a time. Every prior
-    // request is explicitly cancelled before starting a new one, so
-    // out-of-order completion (e.g. from rapid repeated taps on the
-    // Explorer button, or a resume-refresh overlapping a click-refresh)
-    // can never let a stale/incomplete SAF read win over a fresher one
-    // -- this is what previously caused the Explorer to sometimes open
-    // empty despite the folder actually having content.
     var refreshJob by remember { mutableStateOf<Job?>(null) }
 
     fun updateNode(node: WorkspaceNode, targetUri: String, transform: (WorkspaceNode) -> WorkspaceNode): WorkspaceNode {
@@ -97,6 +89,23 @@ fun EditorScreen(
     suspend fun refreshTree(preserveExpansion: Boolean = true) {
         val root = session.workspaceRoot ?: return
         val newTree = withContext(Dispatchers.IO) { store.loadTree(root) } ?: return
+
+        // Guard against a stale/incomplete SAF listing racing with a
+        // recent write (e.g. right after typing with Auto Save on, or
+        // right after the app resumes from background) -- if the
+        // freshly loaded tree suddenly has no children while the
+        // previously loaded tree for this same root had some, treat
+        // it as a transient read glitch and keep what we already
+        // have rather than replacing a good tree with an empty one.
+        // (Restored here -- this guard existed before but was
+        // dropped during a later rewrite of this function; that
+        // omission was the actual cause of the Explorer sometimes
+        // opening completely empty.)
+        val previous = session.tree
+        if (newTree.children.isEmpty() && previous != null && previous.uri == root && previous.children.isNotEmpty()) {
+            return
+        }
+
         if (!preserveExpansion || session.tree == null) {
             session.tree = newTree
             return
@@ -370,21 +379,7 @@ fun EditorScreen(
         }
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(CharcoalBg)
-            .pointerInput(Unit) {
-                var totalDrag = 0f
-                detectHorizontalDragGestures(
-                    onDragEnd = {
-                        if (totalDrag > 100f) onSwipeToAi()
-                        totalDrag = 0f
-                    },
-                    onHorizontalDrag = { _, dragAmount -> totalDrag += dragAmount }
-                )
-            }
-    ) {
+    Box(modifier = Modifier.fillMaxSize().background(CharcoalBg)) {
         Row(modifier = Modifier.fillMaxSize()) {
             EditorRail(
                 onMenuClick = { menuOpen = true },
@@ -396,7 +391,28 @@ fun EditorScreen(
                 }
             )
 
-            Column(modifier = Modifier.fillMaxSize().weight(1f)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .weight(1f)
+                    // Swipe-to-AI gesture scoped to just the main
+                    // content column now, instead of the whole
+                    // screen -- previously it lived on the outer Box,
+                    // which meant the EditorRail's own buttons shared
+                    // the same hit-test/gesture region as the drag
+                    // detector, a likely contributor to taps on the
+                    // Explorer button sometimes not registering.
+                    .pointerInput(Unit) {
+                        var totalDrag = 0f
+                        detectHorizontalDragGestures(
+                            onDragEnd = {
+                                if (totalDrag > 100f) onSwipeToAi()
+                                totalDrag = 0f
+                            },
+                            onHorizontalDrag = { _, dragAmount -> totalDrag += dragAmount }
+                        )
+                    }
+            ) {
                 Box(modifier = Modifier.statusBarsPadding())
 
                 EditorTopBar(

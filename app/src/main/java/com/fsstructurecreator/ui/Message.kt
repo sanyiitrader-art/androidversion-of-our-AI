@@ -1,5 +1,8 @@
 package com.fsstructurecreator.ui
 
+import android.content.ContentValues
+import android.content.Context
+import android.provider.MediaStore
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -18,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ThumbDown
 import androidx.compose.material.icons.filled.ThumbUp
@@ -42,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -262,13 +267,60 @@ private fun AiMessage(
     }
 }
 
+private fun extensionForLanguage(language: String): String = when (language.trim().lowercase()) {
+    "python", "py" -> "py"
+    "kotlin", "kt" -> "kt"
+    "javascript", "js" -> "js"
+    "typescript", "ts" -> "ts"
+    "java" -> "java"
+    "c" -> "c"
+    "cpp", "c++" -> "cpp"
+    "csharp", "c#", "cs" -> "cs"
+    "html" -> "html"
+    "css" -> "css"
+    "json" -> "json"
+    "bash", "sh", "shell" -> "sh"
+    "sql" -> "sql"
+    "ruby", "rb" -> "rb"
+    "php" -> "php"
+    "go" -> "go"
+    "rust", "rs" -> "rs"
+    "swift" -> "swift"
+    "xml" -> "xml"
+    "yaml", "yml" -> "yml"
+    else -> "txt"
+}
+
+/** Saves a code snippet into the device's Downloads collection via
+ *  MediaStore -- no WRITE_EXTERNAL_STORAGE permission needed on
+ *  API 29+ (this app's min SDK) since MediaStore.Downloads uses
+ *  scoped storage. */
+private fun downloadCodeSnippet(context: Context, language: String, code: String) {
+    val ext = extensionForLanguage(language)
+    val fileName = "snippet_${System.currentTimeMillis()}.$ext"
+    val resolver = context.contentResolver
+
+    val values = ContentValues().apply {
+        put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+        put(MediaStore.Downloads.MIME_TYPE, "text/plain")
+        put(MediaStore.Downloads.IS_PENDING, 1)
+    }
+
+    val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return
+    resolver.openOutputStream(uri)?.use { it.write(code.toByteArray()) }
+
+    val doneValues = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
+    resolver.update(uri, doneValues, null, null)
+}
+
 /** Minimal markdown-style renderer for AI responses: fenced code
- *  blocks get a monospace box, "#"/"##"/"###" headings, "-"/"*"
- *  lists, everything else as paragraphs. Not a full markdown parser
- *  -- just enough to stop code blocks from rendering as plain text
- *  with literal backtick fences, which is what was happening before. */
+ *  blocks get a monospace box with a header row (detected language
+ *  at top-left, Copy/Download icon buttons at top-right), "#"/"##"/
+ *  "###" headings, "-"/"*" lists, everything else as paragraphs. */
 @Composable
 private fun FormattedText(text: String) {
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
     val lines = text.split("\n")
     var i = 0
 
@@ -277,6 +329,7 @@ private fun FormattedText(text: String) {
             val line = lines[i]
 
             if (line.trim().startsWith("```")) {
+                val language = line.trim().removePrefix("```").trim().ifEmpty { "text" }
                 val codeLines = mutableListOf<String>()
                 i++
                 while (i < lines.size && !lines[i].trim().startsWith("```")) {
@@ -284,6 +337,8 @@ private fun FormattedText(text: String) {
                     i++
                 }
                 if (i < lines.size) i++ // skip closing fence
+                val codeText = codeLines.joinToString("\n")
+
                 Surface(
                     color = CharcoalInput,
                     shape = RoundedCornerShape(8.dp),
@@ -291,13 +346,41 @@ private fun FormattedText(text: String) {
                         .fillMaxWidth()
                         .padding(vertical = 4.dp)
                 ) {
-                    Text(
-                        text = codeLines.joinToString("\n"),
-                        color = TextPrimary,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.5.sp,
-                        modifier = Modifier.padding(12.dp)
-                    )
+                    Column {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 12.dp, end = 4.dp, top = 4.dp)
+                        ) {
+                            Text(
+                                text = language,
+                                color = TextSecondary,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp
+                            )
+                            androidx.compose.foundation.layout.Spacer(modifier = Modifier.weight(1f))
+                            IconButton(
+                                onClick = { clipboard.setText(AnnotatedString(codeText)) },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(Icons.Filled.ContentCopy, contentDescription = "Copy code", tint = TextSecondary, modifier = Modifier.size(14.dp))
+                            }
+                            IconButton(
+                                onClick = { downloadCodeSnippet(context, language, codeText) },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(Icons.Filled.FileDownload, contentDescription = "Download code", tint = TextSecondary, modifier = Modifier.size(14.dp))
+                            }
+                        }
+                        Text(
+                            text = codeText,
+                            color = TextPrimary,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.5.sp,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                        )
+                    }
                 }
                 continue
             }
