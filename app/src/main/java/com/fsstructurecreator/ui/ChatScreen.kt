@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -75,12 +74,6 @@ private fun newMessage(
     )
 }
 
-/** Purely in-memory, never touches disk -- a conversation is only
- *  ever persisted once it actually has a message in it (see
- *  handleSend/handleRetry/handleEditSave below, which all only save
- *  after a real message exists). This is what stops "New Chat" /
- *  returning from the editor / app launch from silently littering the
- *  sidebar with empty conversations. */
 private fun newEmptyConversation(): Conversation {
     return Conversation(
         id = UUID.randomUUID().toString(),
@@ -152,12 +145,6 @@ fun ChatScreen(
         else conversationStore.searchConversations(searchQuery)
     }
 
-    // Only creates a fresh (unsaved) conversation on a genuine first
-    // launch (session.conversation == null, i.e. process just
-    // started). Returning here after switching to the editor and back
-    // finds session.conversation already set and does NOT touch it --
-    // this is what actually fixes the "chat resets" bug, since
-    // session survives the screen switch (see MainActivity.kt).
     LaunchedEffect(Unit) {
         if (session.conversation == null) {
             session.conversation = newEmptyConversation()
