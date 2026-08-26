@@ -5,6 +5,12 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
@@ -22,6 +28,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Menu
@@ -110,6 +117,30 @@ private fun currentlyValidFolderUri(context: Context, prefs: android.content.Sha
         return null
     }
     return saved
+}
+
+@Composable
+private fun TypingDots() {
+    val transition = rememberInfiniteTransition(label = "typing")
+    Row(modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp)) {
+        repeat(3) { index ->
+            val alpha by transition.animateFloat(
+                initialValue = 0.3f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(600, delayMillis = index * 150, easing = FastOutSlowInEasing),
+                    repeatMode = RepeatMode.Reverse
+                ),
+                label = "dot$index"
+            )
+            Box(
+                modifier = Modifier
+                    .padding(end = 4.dp)
+                    .size(6.dp)
+                    .background(Mint.copy(alpha = alpha), CircleShape)
+            )
+        }
+    }
 }
 
 @Composable
@@ -365,9 +396,9 @@ fun ChatScreen(
         conversationStore.saveConversation(updated)
     }
 
-    LaunchedEffect(session.conversation?.messages?.size) {
+    LaunchedEffect(session.conversation?.messages?.size, sending) {
         val size = session.conversation?.messages?.size ?: 0
-        if (size > 0) listState.animateScrollToItem(size - 1)
+        if (size > 0 || sending) listState.animateScrollToItem(listState.layoutInfo.totalItemsCount.coerceAtLeast(1) - 1)
     }
 
     Box(
@@ -411,6 +442,7 @@ fun ChatScreen(
             val messages = session.conversation?.messages ?: emptyList()
             val latestUserId = messages.lastOrNull { it.role == MessageRole.USER }?.id
             val latestAiId = messages.lastOrNull { it.role == MessageRole.ASSISTANT }?.id
+            val showTyping = sending && (messages.isEmpty() || messages.last().role == MessageRole.USER)
 
             LazyColumn(
                 state = listState,
@@ -429,6 +461,9 @@ fun ChatScreen(
                         onRetry = { handleRetry(msg.id) },
                         onSaveEdit = { newText -> handleEditSave(msg.id, newText) }
                     )
+                }
+                if (showTyping) {
+                    item { TypingDots() }
                 }
             }
 

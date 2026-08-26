@@ -4,6 +4,19 @@ import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 
+private val IMAGE_EXTENSIONS = setOf(
+    "jpg", "jpeg", "jpe", "jif", "jfif", "jfi", "png", "gif", "webp", "avif", "tiff", "tif",
+    "bmp", "dib", "heif", "heic", "ico", "svg", "svgz", "ai", "eps", "pdf", "jp2", "j2k", "jpf",
+    "jpx", "jpm", "mj2", "jxl", "bpg", "dng", "cr2", "cr3", "crw", "nef", "nrw", "arw", "srf",
+    "sr2", "raf", "orf", "rw2", "pef", "psd", "pdn", "xcf", "ind", "indd", "indt", "pbm", "pgm",
+    "ppm", "ras", "rgb", "tga"
+)
+
+fun isImageExtension(name: String): Boolean {
+    val ext = name.substringAfterLast('.', "").lowercase()
+    return ext in IMAGE_EXTENSIONS
+}
+
 class WorkspaceStore(private val context: Context) {
 
     fun loadTree(rootUri: String): WorkspaceNode? {
@@ -38,15 +51,15 @@ class WorkspaceStore(private val context: Context) {
             val bytesRead = stream.read(buffer)
             if (bytesRead <= 0) return@use false
 
-            var suspiciousCount = 0
+            var suspicious = 0
             for (i in 0 until bytesRead) {
                 val b = buffer[i].toInt() and 0xFF
                 if (b == 0) return@use true
                 val isPrintableOrWhitespace =
                     b in 0x20..0x7E || b == 0x09 || b == 0x0A || b == 0x0D || b >= 0x80
-                if (!isPrintableOrWhitespace) suspiciousCount++
+                if (!isPrintableOrWhitespace) suspicious++
             }
-            suspiciousCount.toDouble() / bytesRead > 0.10
+            suspicious.toDouble() / bytesRead > 0.10
         }
     }
 
@@ -88,15 +101,6 @@ class WorkspaceStore(private val context: Context) {
         }
     }
 
-    /** Renames a file or folder. Rebuilt to navigate down from a
-     *  fromTreeUri() parent (same proven pattern as createFile/
-     *  createFolder) and locate the target by its current name,
-     *  rather than reconstructing it via fromSingleUri() on a bare
-     *  document URI -- that pattern was unreliable for SAF documents
-     *  that only hold permission via their covering tree grant.
-     *  Returns the item's real post-rename URI on success, since some
-     *  storage providers change the underlying document ID when an
-     *  item is renamed. */
     fun rename(parentUri: String, oldName: String, newName: String): RenameResult {
         return try {
             val parent = DocumentFile.fromTreeUri(context, Uri.parse(parentUri)) ?: return RenameResult.Failure

@@ -57,6 +57,8 @@ import androidx.compose.ui.unit.sp
 import com.fsstructurecreator.data.Attachment
 import com.fsstructurecreator.data.ChatMessage
 import com.fsstructurecreator.data.MessageRole
+import com.fsstructurecreator.editor.highlightSyntax
+import com.fsstructurecreator.editor.isHighlightableExtension
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -291,10 +293,6 @@ private fun extensionForLanguage(language: String): String = when (language.trim
     else -> "txt"
 }
 
-/** Saves a code snippet into the device's Downloads collection via
- *  MediaStore -- no WRITE_EXTERNAL_STORAGE permission needed on
- *  API 29+ (this app's min SDK) since MediaStore.Downloads uses
- *  scoped storage. */
 private fun downloadCodeSnippet(context: Context, language: String, code: String) {
     val ext = extensionForLanguage(language)
     val fileName = "snippet_${System.currentTimeMillis()}.$ext"
@@ -313,10 +311,6 @@ private fun downloadCodeSnippet(context: Context, language: String, code: String
     resolver.update(uri, doneValues, null, null)
 }
 
-/** Minimal markdown-style renderer for AI responses: fenced code
- *  blocks get a monospace box with a header row (detected language
- *  at top-left, Copy/Download icon buttons at top-right), "#"/"##"/
- *  "###" headings, "-"/"*" lists, everything else as paragraphs. */
 @Composable
 private fun FormattedText(text: String) {
     val context = LocalContext.current
@@ -336,8 +330,17 @@ private fun FormattedText(text: String) {
                     codeLines.add(lines[i])
                     i++
                 }
-                if (i < lines.size) i++ // skip closing fence
+                if (i < lines.size) i++
                 val codeText = codeLines.joinToString("\n")
+                // codeText is the exact original string, untouched --
+                // used as-is for Copy/Download below. Only the Text
+                // composable's rendering uses a separately colored
+                // AnnotatedString derived from it.
+                val ext = extensionForLanguage(language)
+                val highlighted = remember(codeText, ext) {
+                    if (isHighlightableExtension(ext)) highlightSyntax(codeText, ext)
+                    else AnnotatedString(codeText)
+                }
 
                 Surface(
                     color = CharcoalInput,
@@ -374,8 +377,7 @@ private fun FormattedText(text: String) {
                             }
                         }
                         Text(
-                            text = codeText,
-                            color = TextPrimary,
+                            text = highlighted,
                             fontFamily = FontFamily.Monospace,
                             fontSize = 12.5.sp,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)

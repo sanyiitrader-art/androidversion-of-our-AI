@@ -65,6 +65,13 @@ data class InlineEditState(
     val error: CreationErrorState = CreationErrorState.NONE
 )
 
+private fun findNodeName(tree: WorkspaceNode?, uri: String): String? {
+    if (tree == null) return null
+    if (tree.uri == uri) return tree.name
+    for (c in tree.children) findNodeName(c, uri)?.let { return it }
+    return null
+}
+
 @Composable
 fun EditorScreen(
     session: EditorSessionState,
@@ -135,6 +142,7 @@ fun EditorScreen(
         session.workspaceRoot = uri
         session.selectedUri = null
         session.openFile = null
+        session.openImageUri = null
         session.unsupportedFileMessage = null
         session.navHistory = NavigationHistory()
         session.unsavedEdits = emptyMap()
@@ -143,13 +151,19 @@ fun EditorScreen(
     }
 
     suspend fun openFileAt(uri: String, addToHistory: Boolean = true) {
-        fun findName(n: WorkspaceNode?): String? {
-            if (n == null) return null
-            if (n.uri == uri) return n.name
-            for (c in n.children) findName(c)?.let { return it }
-            return null
+        val name = findNodeName(session.tree, uri) ?: uri.substringAfterLast('/')
+
+        if (isImageExtension(name)) {
+            session.openFile = null
+            session.unsupportedFileMessage = null
+            session.openImageUri = uri
+            session.selectedUri = uri
+            explorerOpen = false
+            if (addToHistory) session.navHistory = session.navHistory.navigateTo(uri)
+            return
         }
-        val name = findName(session.tree) ?: uri.substringAfterLast('/')
+
+        session.openImageUri = null
 
         if (!session.unsavedEdits.containsKey(uri)) {
             val isBinary = withContext(Dispatchers.IO) { store.isLikelyBinary(uri) }
@@ -243,6 +257,9 @@ fun EditorScreen(
                     if (session.openFile?.uri == edit.existingUri) {
                         session.openFile = session.openFile?.copy(uri = newUri, name = trimmed)
                     }
+                    if (session.openImageUri == edit.existingUri) {
+                        session.openImageUri = newUri
+                    }
                     if (session.selectedUri == edit.existingUri) {
                         session.selectedUri = newUri
                     }
@@ -295,6 +312,9 @@ fun EditorScreen(
         if (openUri != null && isUnderOrEqual(openUri, node)) {
             session.openFile = null
             session.unsupportedFileMessage = null
+        }
+        if (session.openImageUri != null && isUnderOrEqual(session.openImageUri!!, node)) {
+            session.openImageUri = null
         }
         session.unsavedEdits = session.unsavedEdits.filterKeys { !isUnderOrEqual(it, node) }
         if (session.selectedUri != null && isUnderOrEqual(session.selectedUri!!, node)) {
@@ -379,16 +399,6 @@ fun EditorScreen(
                     if (session.workspaceRoot != null) {
                         explorerOpen = !explorerOpen
                         if (explorerOpen) {
-                            // Clears focus (and therefore dismisses any
-                            // active text-selection cursor handle /
-                            // floating toolbar) BEFORE the panel opens.
-                            // Android renders those handles as a
-                            // window-level overlay above normal app
-                            // content, so no amount of Compose z-
-                            // ordering on the panel itself can cover
-                            // them -- removing focus so there's simply
-                            // nothing active to bleed through is the
-                            // correct fix.
                             focusManager.clearFocus(force = true)
                             triggerRefresh()
                         }
@@ -430,7 +440,8 @@ fun EditorScreen(
                     },
                     tree = session.tree,
                     openFileContent = session.openFile?.content,
-                    currentFileName = session.openFile?.name,
+                    currentFileName = session.openFile?.name
+                        ?: session.openImageUri?.let { findNodeName(session.tree, it) },
                     searchMode = searchMode,
                     onSearchModeChange = { searchMode = it },
                     onSelectFileResult = { path -> scope.launch { openFileAt(path) } },
@@ -442,6 +453,10 @@ fun EditorScreen(
                         onNewFile = { openFolderLauncher.launch(null) },
                         onOpenFile = { openFileLauncher.launch(arrayOf("text/*")) },
                         onOpenFolder = { openFolderLauncher.launch(null) }
+                    )
+                    session.openImageUri != null -> ImageFileViewer(
+                        uri = session.openImageUri!!,
+                        name = findNodeName(session.tree, session.openImageUri!!) ?: "image"
                     )
                     session.unsupportedFileMessage != null -> UnsupportedFileScreen(session.unsupportedFileMessage!!)
                     else -> TextEditorView(
