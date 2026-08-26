@@ -303,6 +303,13 @@ fun ChatScreen(
         }
     }
 
+    // Retry: strips the old response from session.conversation
+    // IMMEDIATELY, before the async regeneration starts -- this is
+    // what makes the existing typing-dots animation actually appear
+    // (showTyping below requires the last visible message to be the
+    // user's prompt). Previously the old response stayed visible for
+    // the entire wait, so that condition was never true during a
+    // retry and the animation silently never showed.
     fun handleRetry(assistantMessageId: String) {
         val convo = session.conversation ?: return
         if (sending) return
@@ -313,20 +320,26 @@ fun ChatScreen(
         if (userMsg.role != MessageRole.USER) return
 
         val historyBefore = messages.take(assistantIndex - 1)
+
+        val stripped = convo.copy(messages = messages.take(assistantIndex))
+        session.conversation = stripped
         sending = true
 
         scope.launch {
             try {
                 val assistantText = runTurn(historyBefore, userMsg.content, userMsg.attachments)
                 val newAssistantMsg = newMessage(MessageRole.ASSISTANT, assistantText)
-                val updated = convo.copy(
-                    messages = messages.take(assistantIndex) + newAssistantMsg,
+                val updated = stripped.copy(
+                    messages = stripped.messages + newAssistantMsg,
                     updatedAt = System.currentTimeMillis().toString()
                 )
                 session.conversation = updated
                 conversationStore.saveConversation(updated)
             } catch (e: Exception) {
-                // Leave the old response in place on failure.
+                val errorMsg = newMessage(MessageRole.ASSISTANT, e.message ?: "Something went wrong.")
+                val updated = stripped.copy(messages = stripped.messages + errorMsg)
+                session.conversation = updated
+                conversationStore.saveConversation(updated)
             } finally {
                 sending = false
             }
