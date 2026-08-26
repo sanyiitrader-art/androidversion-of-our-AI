@@ -9,7 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Image as ImageIcon
+import androidx.compose.material.icons.filled.BrokenImage
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -32,10 +32,12 @@ import kotlinx.coroutines.withContext
 /** Lightweight image viewer: decodes via BitmapFactory with automatic
  *  downsampling (never loads a full-resolution image into memory),
  *  reused for every supported extension. Formats the platform can't
- *  actually decode (RAW camera formats, PSD/AI/EPS/INDD/XCF, SVG,
- *  PDF, etc.) simply fail decode and fall back to an info card
- *  instead of garbled output -- no per-format special-casing, no new
- *  dependency needed. */
+ *  actually decode fall back to an info card instead of garbled
+ *  output. Uses Icons.Filled.BrokenImage rather than Icons.Filled.Image
+ *  for the fallback icon -- deliberately, since "Image" collides in
+ *  name with the androidx.compose.foundation.Image composable used
+ *  below to render the actual bitmap, which Kotlin's resolver can
+ *  trip over when both are in scope in the same file. */
 @Composable
 fun ImageFileViewer(uri: String, name: String) {
     val context = LocalContext.current
@@ -73,7 +75,7 @@ fun ImageFileViewer(uri: String, name: String) {
         when {
             bmp != null -> Image(bitmap = bmp, contentDescription = name, modifier = Modifier.padding(16.dp))
             failed -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(ImageIcon, contentDescription = null, tint = TextSecondary, modifier = Modifier.padding(bottom = 8.dp))
+                Icon(Icons.Filled.BrokenImage, contentDescription = null, tint = TextSecondary, modifier = Modifier.padding(bottom = 8.dp))
                 Text(name, color = TextSecondary)
                 Text("Preview not available for this format", color = TextSecondary)
             }
