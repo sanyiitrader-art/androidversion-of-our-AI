@@ -6,6 +6,8 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -18,7 +20,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.InlineTextContent
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
@@ -39,10 +40,13 @@ private data class InlineBuildResult(
     val inlineContent: Map<String, InlineTextContent>
 )
 
-/** All InlineTextContent/Placeholder usage lives ONLY in this file --
- *  Message.kt never touches these APIs directly, it only calls
- *  InlineMarkdownText() below. This isolation is intentional: it's
- *  the only file that needs these specific imports. */
+// InlineTextContent and appendInlineContent both live in
+// androidx.compose.foundation.text -- NOT androidx.compose.ui.text.
+// The previous version imported them from the wrong package, which
+// left them (and appendInlineContent) fully unresolved, and the
+// resulting broken type inference cascaded into the withStyle/append
+// calls further down reporting as unresolved too, even though those
+// really are plain AnnotatedString.Builder members.
 private fun buildInlineContent(text: String): InlineBuildResult {
     val builder = AnnotatedString.Builder()
     val inlineMap = mutableMapOf<String, InlineTextContent>()

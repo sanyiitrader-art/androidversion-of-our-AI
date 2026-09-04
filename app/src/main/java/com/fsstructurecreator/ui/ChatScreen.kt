@@ -60,15 +60,19 @@ import com.fsstructurecreator.data.FsRequest
 import com.fsstructurecreator.data.MessageRole
 import com.fsstructurecreator.data.SettingsStore
 import com.fsstructurecreator.ai.GeminiClient
-import com.fsstructurecreator.ai.GenerationHandle
 import com.fsstructurecreator.fs.FilesystemEngine
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.util.UUID
 
 private const val PREFS_NAME = "fs_prefs"
 private const val KEY_SELECTED_FOLDER_URI = "selected_folder_uri"
 
-private fun newMessage(role: MessageRole, content: String, attachments: List<Attachment> = emptyList()): ChatMessage {
+private fun newMessage(
+    role: MessageRole,
+    content: String,
+    attachments: List<Attachment> = emptyList()
+): ChatMessage {
     return ChatMessage(
         id = UUID.randomUUID().toString(),
         role = role,
@@ -79,7 +83,12 @@ private fun newMessage(role: MessageRole, content: String, attachments: List<Att
 }
 
 private fun newEmptyConversation(): Conversation {
-    return Conversation(id = UUID.randomUUID().toString(), title = "New chat", messages = emptyList(), updatedAt = System.currentTimeMillis().toString())
+    return Conversation(
+        id = UUID.randomUUID().toString(),
+        title = "New chat",
+        messages = emptyList(),
+        updatedAt = System.currentTimeMillis().toString()
+    )
 }
 
 private fun deriveTitle(text: String): String {
@@ -95,12 +104,15 @@ private fun summarizeForAi(results: List<FsOperationResult>): String {
         for (f in r.createdFiles) lines.add("Created file: ${f}")
         for (e in r.errors) lines.add("Failed (${e.error}) for ${e.itemKind} \"${e.path}\"")
     }
-    return if (lines.isEmpty()) "[Execution result]\nNo items were created." else "[Execution result]\n" + lines.joinToString("\n")
+    return if (lines.isEmpty()) "[Execution result]\nNo items were created."
+    else "[Execution result]\n" + lines.joinToString("\n")
 }
 
 private fun currentlyValidFolderUri(context: Context, prefs: android.content.SharedPreferences): String? {
     val saved = prefs.getString(KEY_SELECTED_FOLDER_URI, null) ?: return null
-    val stillGranted = context.contentResolver.persistedUriPermissions.any { it.uri.toString() == saved && it.isWritePermission }
+    val stillGranted = context.contentResolver.persistedUriPermissions.any {
+        it.uri.toString() == saved && it.isWritePermission
+    }
     if (!stillGranted) {
         prefs.edit().remove(KEY_SELECTED_FOLDER_URI).apply()
         return null
@@ -114,20 +126,30 @@ private fun TypingDots() {
     Row(modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp)) {
         repeat(3) { index ->
             val alpha by transition.animateFloat(
-                initialValue = 0.3f, targetValue = 1f,
+                initialValue = 0.3f,
+                targetValue = 1f,
                 animationSpec = infiniteRepeatable(
                     animation = tween(600, delayMillis = index * 150, easing = FastOutSlowInEasing),
                     repeatMode = RepeatMode.Reverse
                 ),
                 label = "dot$index"
             )
-            Box(modifier = Modifier.padding(end = 4.dp).size(6.dp).background(Mint.copy(alpha = alpha), CircleShape))
+            Box(
+                modifier = Modifier
+                    .padding(end = 4.dp)
+                    .size(6.dp)
+                    .background(Mint.copy(alpha = alpha), CircleShape)
+            )
         }
     }
 }
 
 @Composable
-fun ChatScreen(session: ChatSessionState, onOpenEditor: () -> Unit, onSwipeToEditor: () -> Unit) {
+fun ChatScreen(
+    session: ChatSessionState,
+    onOpenEditor: () -> Unit,
+    onSwipeToEditor: () -> Unit
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -142,7 +164,8 @@ fun ChatScreen(session: ChatSessionState, onOpenEditor: () -> Unit, onSwipeToEdi
     var sidebarOpen by remember { mutableStateOf(false) }
     var editApiOpen by remember { mutableStateOf(false) }
     var sending by remember { mutableStateOf(false) }
-    var activeHandle by remember { mutableStateOf<GenerationHandle?>(null) }
+    var generationJob by remember { mutableStateOf<Job?>(null) }
+    var cancelledByUser by remember { mutableStateOf(false) }
     var pendingAttachments by remember { mutableStateOf<List<Attachment>>(emptyList()) }
     var pendingFsRequest by remember { mutableStateOf<FsRequest?>(null) }
     val listState = rememberLazyListState()
@@ -152,42 +175,53 @@ fun ChatScreen(session: ChatSessionState, onOpenEditor: () -> Unit, onSwipeToEdi
     }
 
     fun refreshConversations() {
-        conversations = if (searchQuery.isBlank()) conversationStore.listConversations() else conversationStore.searchConversations(searchQuery)
+        conversations = if (searchQuery.isBlank()) conversationStore.listConversations()
+        else conversationStore.searchConversations(searchQuery)
     }
 
     LaunchedEffect(Unit) {
-        if (session.conversation == null) session.conversation = newEmptyConversation()
+        if (session.conversation == null) {
+            session.conversation = newEmptyConversation()
+        }
         refreshConversations()
     }
     LaunchedEffect(searchQuery) { refreshConversations() }
 
     fun handleDeleteConversation(id: String) {
         conversationStore.deleteConversation(id)
-        if (session.conversation?.id == id) session.conversation = newEmptyConversation()
+        if (session.conversation?.id == id) {
+            session.conversation = newEmptyConversation()
+        }
         refreshConversations()
     }
 
-    fun handleStop() {
-        activeHandle?.cancel()
-    }
-
-    val folderPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri: Uri? ->
+    val folderPickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri: Uri? ->
         if (uri != null) {
             context.contentResolver.takePersistableUriPermission(
-                uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                uri,
+                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             )
             prefs.edit().putString(KEY_SELECTED_FOLDER_URI, uri.toString()).apply()
+
             val request = pendingFsRequest
             if (request != null) {
                 pendingFsRequest = null
                 scope.launch {
-                    executeAndRespond(request, uri.toString(), fsEngine, geminiClient, session.conversation, conversationStore) { session.conversation = it }
+                    executeAndRespond(
+                        request, uri.toString(), fsEngine, geminiClient,
+                        session.conversation, conversationStore
+                    ) { session.conversation = it }
                 }
             }
         }
     }
 
-    val attachLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
+    val attachLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris: List<Uri> ->
         val newOnes = uris.mapNotNull { uri ->
             val name = queryFileName(context, uri) ?: return@mapNotNull null
             val ext = name.substringAfterLast('.', "").lowercase()
@@ -203,8 +237,13 @@ fun ChatScreen(session: ChatSessionState, onOpenEditor: () -> Unit, onSwipeToEdi
         pendingAttachments = pendingAttachments + newOnes.take(room.coerceAtLeast(0))
     }
 
-    suspend fun runTurn(historyBeforeThisTurn: List<ChatMessage>, userText: String, attachments: List<Attachment>, handle: GenerationHandle): String {
-        val turn = geminiClient.sendTurn(historyBeforeThisTurn, userText, attachments, handle)
+    suspend fun runTurn(
+        historyBeforeThisTurn: List<ChatMessage>,
+        userText: String,
+        attachments: List<Attachment>
+    ): String {
+        val turn = geminiClient.sendTurn(historyBeforeThisTurn, userText, attachments)
+
         if (turn.fsRequest == null) return turn.replyText
 
         val savedFolder = currentlyValidFolderUri(context, prefs)
@@ -214,18 +253,31 @@ fun ChatScreen(session: ChatSessionState, onOpenEditor: () -> Unit, onSwipeToEdi
             return turn.replyText
         }
 
-        val resolvedOps = turn.fsRequest.operations.map { op -> op.copy(rootPath = if (op.rootPath == "SELECTED_FOLDER") savedFolder else op.rootPath) }
+        val resolvedOps = turn.fsRequest.operations.map { op ->
+            op.copy(rootPath = if (op.rootPath == "SELECTED_FOLDER") savedFolder else op.rootPath)
+        }
         val results = resolvedOps.map { fsEngine.executeOperation(it) }
         val summary = summarizeForAi(results)
 
-        val followUpHistory = historyBeforeThisTurn + newMessage(MessageRole.USER, userText, attachments) + newMessage(MessageRole.ASSISTANT, turn.replyText)
-        val followUp = geminiClient.sendTurn(followUpHistory, summary, emptyList(), handle)
+        val followUpHistory = historyBeforeThisTurn +
+            newMessage(MessageRole.USER, userText, attachments) +
+            newMessage(MessageRole.ASSISTANT, turn.replyText)
+        val followUp = geminiClient.sendTurn(followUpHistory, summary, emptyList())
         return followUp.replyText
+    }
+
+    fun handlePause() {
+        cancelledByUser = true
+        generationJob?.cancel()
+        geminiClient.cancelActive()
+        sending = false
+        generationJob = null
     }
 
     fun handleSend(text: String) {
         val convo = session.conversation ?: return
         if (sending) return
+        if (text.isBlank() && pendingAttachments.isEmpty()) return
 
         val userMsg = newMessage(MessageRole.USER, text, pendingAttachments)
         val historyBefore = convo.messages
@@ -239,21 +291,23 @@ fun ChatScreen(session: ChatSessionState, onOpenEditor: () -> Unit, onSwipeToEdi
         session.conversation = working
         val attachmentsForSend = pendingAttachments
         pendingAttachments = emptyList()
-
-        val handle = GenerationHandle()
-        activeHandle = handle
         sending = true
 
-        scope.launch {
+        generationJob = scope.launch {
             try {
-                val assistantText = runTurn(historyBefore, text, attachmentsForSend, handle)
+                val assistantText = runTurn(historyBefore, text, attachmentsForSend)
                 val assistantMsg = newMessage(MessageRole.ASSISTANT, assistantText)
-                working = working.copy(messages = working.messages + assistantMsg, updatedAt = System.currentTimeMillis().toString())
+                working = working.copy(
+                    messages = working.messages + assistantMsg,
+                    updatedAt = System.currentTimeMillis().toString()
+                )
                 session.conversation = working
                 conversationStore.saveConversation(working)
                 refreshConversations()
             } catch (e: Exception) {
-                if (!handle.cancelled) {
+                if (cancelledByUser) {
+                    cancelledByUser = false
+                } else {
                     val errorMsg = newMessage(MessageRole.ASSISTANT, e.message ?: "Something went wrong.")
                     working = working.copy(messages = working.messages + errorMsg)
                     session.conversation = working
@@ -261,7 +315,7 @@ fun ChatScreen(session: ChatSessionState, onOpenEditor: () -> Unit, onSwipeToEdi
                 }
             } finally {
                 sending = false
-                activeHandle = null
+                generationJob = null
             }
         }
     }
@@ -276,22 +330,25 @@ fun ChatScreen(session: ChatSessionState, onOpenEditor: () -> Unit, onSwipeToEdi
         if (userMsg.role != MessageRole.USER) return
 
         val historyBefore = messages.take(assistantIndex - 1)
+
         val stripped = convo.copy(messages = messages.take(assistantIndex))
         session.conversation = stripped
-
-        val handle = GenerationHandle()
-        activeHandle = handle
         sending = true
 
-        scope.launch {
+        generationJob = scope.launch {
             try {
-                val assistantText = runTurn(historyBefore, userMsg.content, userMsg.attachments, handle)
+                val assistantText = runTurn(historyBefore, userMsg.content, userMsg.attachments)
                 val newAssistantMsg = newMessage(MessageRole.ASSISTANT, assistantText)
-                val updated = stripped.copy(messages = stripped.messages + newAssistantMsg, updatedAt = System.currentTimeMillis().toString())
+                val updated = stripped.copy(
+                    messages = stripped.messages + newAssistantMsg,
+                    updatedAt = System.currentTimeMillis().toString()
+                )
                 session.conversation = updated
                 conversationStore.saveConversation(updated)
             } catch (e: Exception) {
-                if (!handle.cancelled) {
+                if (cancelledByUser) {
+                    cancelledByUser = false
+                } else {
                     val errorMsg = newMessage(MessageRole.ASSISTANT, e.message ?: "Something went wrong.")
                     val updated = stripped.copy(messages = stripped.messages + errorMsg)
                     session.conversation = updated
@@ -299,7 +356,7 @@ fun ChatScreen(session: ChatSessionState, onOpenEditor: () -> Unit, onSwipeToEdi
                 }
             } finally {
                 sending = false
-                activeHandle = null
+                generationJob = null
             }
         }
     }
@@ -316,23 +373,28 @@ fun ChatScreen(session: ChatSessionState, onOpenEditor: () -> Unit, onSwipeToEdi
         val historyBefore = messages.take(userIndex)
         val editedUserMsg = original.copy(content = newText)
 
-        var working = convo.copy(messages = historyBefore + editedUserMsg, updatedAt = System.currentTimeMillis().toString())
+        var working = convo.copy(
+            messages = historyBefore + editedUserMsg,
+            updatedAt = System.currentTimeMillis().toString()
+        )
         session.conversation = working
-
-        val handle = GenerationHandle()
-        activeHandle = handle
         sending = true
 
-        scope.launch {
+        generationJob = scope.launch {
             try {
-                val assistantText = runTurn(historyBefore, newText, original.attachments, handle)
+                val assistantText = runTurn(historyBefore, newText, original.attachments)
                 val assistantMsg = newMessage(MessageRole.ASSISTANT, assistantText)
-                working = working.copy(messages = working.messages + assistantMsg, updatedAt = System.currentTimeMillis().toString())
+                working = working.copy(
+                    messages = working.messages + assistantMsg,
+                    updatedAt = System.currentTimeMillis().toString()
+                )
                 session.conversation = working
                 conversationStore.saveConversation(working)
                 refreshConversations()
             } catch (e: Exception) {
-                if (!handle.cancelled) {
+                if (cancelledByUser) {
+                    cancelledByUser = false
+                } else {
                     val errorMsg = newMessage(MessageRole.ASSISTANT, e.message ?: "Something went wrong.")
                     working = working.copy(messages = working.messages + errorMsg)
                     session.conversation = working
@@ -340,21 +402,29 @@ fun ChatScreen(session: ChatSessionState, onOpenEditor: () -> Unit, onSwipeToEdi
                 }
             } finally {
                 sending = false
-                activeHandle = null
+                generationJob = null
             }
         }
     }
 
     fun handleLike(messageId: String) {
         val convo = session.conversation ?: return
-        val updated = convo.copy(messages = convo.messages.map { if (it.id == messageId) it.copy(liked = !it.liked, disliked = false) else it })
+        val updated = convo.copy(
+            messages = convo.messages.map {
+                if (it.id == messageId) it.copy(liked = !it.liked, disliked = false) else it
+            }
+        )
         session.conversation = updated
         conversationStore.saveConversation(updated)
     }
 
     fun handleDislike(messageId: String) {
         val convo = session.conversation ?: return
-        val updated = convo.copy(messages = convo.messages.map { if (it.id == messageId) it.copy(disliked = !it.disliked, liked = false) else it })
+        val updated = convo.copy(
+            messages = convo.messages.map {
+                if (it.id == messageId) it.copy(disliked = !it.disliked, liked = false) else it
+            }
+        )
         session.conversation = updated
         conversationStore.saveConversation(updated)
     }
@@ -365,7 +435,9 @@ fun ChatScreen(session: ChatSessionState, onOpenEditor: () -> Unit, onSwipeToEdi
     }
 
     Box(
-        modifier = Modifier.fillMaxSize().background(CharcoalBg)
+        modifier = Modifier
+            .fillMaxSize()
+            .background(CharcoalBg)
             .pointerInput(sidebarOpen) {
                 var totalDrag = 0f
                 detectHorizontalDragGestures(
@@ -385,12 +457,19 @@ fun ChatScreen(session: ChatSessionState, onOpenEditor: () -> Unit, onSwipeToEdi
         Column(modifier = Modifier.fillMaxSize()) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
-                IconButton(onClick = { sidebarOpen = true }) { Icon(Icons.Filled.Menu, contentDescription = "Menu", tint = TextPrimary) }
+                IconButton(onClick = { sidebarOpen = true }) {
+                    Icon(Icons.Filled.Menu, contentDescription = "Menu", tint = TextPrimary)
+                }
                 Text("FS Structure Creator", color = TextPrimary, modifier = Modifier.padding(start = 4.dp))
                 Spacer(modifier = Modifier.weight(1f))
-                IconButton(onClick = onOpenEditor) { Icon(Icons.Filled.InsertDriveFile, contentDescription = "Editor", tint = TextPrimary) }
+                IconButton(onClick = onOpenEditor) {
+                    Icon(Icons.Filled.InsertDriveFile, contentDescription = "Editor", tint = TextPrimary)
+                }
             }
 
             val messages = session.conversation?.messages ?: emptyList()
@@ -400,7 +479,10 @@ fun ChatScreen(session: ChatSessionState, onOpenEditor: () -> Unit, onSwipeToEdi
 
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxWidth().weight(1f).padding(horizontal = 12.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .padding(horizontal = 12.dp)
             ) {
                 items(messages, key = { it.id }) { msg ->
                     MessageBubble(
@@ -413,17 +495,18 @@ fun ChatScreen(session: ChatSessionState, onOpenEditor: () -> Unit, onSwipeToEdi
                         onSaveEdit = { newText -> handleEditSave(msg.id, newText) }
                     )
                 }
-                if (showTyping) item { TypingDots() }
+                if (showTyping) {
+                    item { TypingDots() }
+                }
             }
 
             MessageInputBar(
-                enabled = !sending,
                 sending = sending,
-                onStop = { handleStop() },
                 onAttachClick = { attachLauncher.launch(arrayOf("text/plain", "text/markdown")) },
                 pendingAttachments = pendingAttachments,
                 onRemoveAttachment = { removeAttachment(it) },
-                onSend = { handleSend(it) }
+                onSend = { handleSend(it) },
+                onPause = { handlePause() }
             )
         }
 
@@ -437,10 +520,21 @@ fun ChatScreen(session: ChatSessionState, onOpenEditor: () -> Unit, onSwipeToEdi
                 activeConversationId = session.conversation?.id,
                 searchQuery = searchQuery,
                 onSearchQueryChange = { searchQuery = it },
-                onSelectConversation = { id -> session.conversation = conversationStore.getConversation(id); sidebarOpen = false },
-                onNewChat = { session.conversation = newEmptyConversation(); refreshConversations(); sidebarOpen = false },
+                onSelectConversation = { id ->
+                    session.conversation = conversationStore.getConversation(id)
+                    sidebarOpen = false
+                },
+                onNewChat = {
+                    session.conversation = newEmptyConversation()
+                    refreshConversations()
+                    sidebarOpen = false
+                },
                 onEditApi = { editApiOpen = true },
-                onSelectFolder = { pendingFsRequest = null; folderPickerLauncher.launch(null); sidebarOpen = false },
+                onSelectFolder = {
+                    pendingFsRequest = null
+                    folderPickerLauncher.launch(null)
+                    sidebarOpen = false
+                },
                 onDeleteConversation = { handleDeleteConversation(it) },
                 onScrimClick = { sidebarOpen = false }
             )
@@ -451,7 +545,10 @@ fun ChatScreen(session: ChatSessionState, onOpenEditor: () -> Unit, onSwipeToEdi
         ApiKeyDialog(
             keyAlreadySaved = settingsStore.hasApiKey(),
             onDismiss = { editApiOpen = false },
-            onSave = { key -> settingsStore.setApiKey(key); editApiOpen = false }
+            onSave = { key ->
+                settingsStore.setApiKey(key)
+                editApiOpen = false
+            }
         )
     }
 }
@@ -466,11 +563,18 @@ private fun queryFileName(context: Context, uri: Uri): String? {
 }
 
 private suspend fun executeAndRespond(
-    request: FsRequest, folderUri: String, fsEngine: FilesystemEngine, geminiClient: GeminiClient,
-    conversation: Conversation?, conversationStore: ConversationStore, onUpdate: (Conversation) -> Unit
+    request: FsRequest,
+    folderUri: String,
+    fsEngine: FilesystemEngine,
+    geminiClient: GeminiClient,
+    conversation: Conversation?,
+    conversationStore: ConversationStore,
+    onUpdate: (Conversation) -> Unit
 ) {
     val convo = conversation ?: return
-    val resolvedOps = request.operations.map { op -> op.copy(rootPath = if (op.rootPath == "SELECTED_FOLDER") folderUri else op.rootPath) }
+    val resolvedOps = request.operations.map { op ->
+        op.copy(rootPath = if (op.rootPath == "SELECTED_FOLDER") folderUri else op.rootPath)
+    }
     val results = resolvedOps.map { fsEngine.executeOperation(it) }
     val summary = summarizeForAi(results)
     val followUp = geminiClient.sendTurn(convo.messages, summary, emptyList())
