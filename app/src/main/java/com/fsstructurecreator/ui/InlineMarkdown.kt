@@ -28,6 +28,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
@@ -40,13 +41,13 @@ private data class InlineBuildResult(
     val inlineContent: Map<String, InlineTextContent>
 )
 
-// InlineTextContent and appendInlineContent both live in
-// androidx.compose.foundation.text -- NOT androidx.compose.ui.text.
-// The previous version imported them from the wrong package, which
-// left them (and appendInlineContent) fully unresolved, and the
-// resulting broken type inference cascaded into the withStyle/append
-// calls further down reporting as unresolved too, even though those
-// really are plain AnnotatedString.Builder members.
+// withStyle is a top-level extension function on AnnotatedString.Builder
+// (defined in androidx.compose.ui.text), NOT a member function -- it
+// needs its own explicit import separate from AnnotatedString itself.
+// Without it, every builder.withStyle(...) { append(...) } call fails
+// to resolve, and since the lambda's receiver type can't be inferred
+// from an unresolved call, the append() calls inside cascade into
+// "unresolved" too even though append genuinely is a real member.
 private fun buildInlineContent(text: String): InlineBuildResult {
     val builder = AnnotatedString.Builder()
     val inlineMap = mutableMapOf<String, InlineTextContent>()
