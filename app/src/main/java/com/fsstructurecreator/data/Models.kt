@@ -2,13 +2,6 @@ package com.fsstructurecreator.data
 
 import kotlinx.serialization.Serializable
 
-// Shared data schema for the whole app. Kotlin equivalent of the
-// Windows project's types.ts + operations.rs combined into one file,
-// since Android has no separate trusted/untrusted process boundary
-// requiring a duplicate schema on both sides.
-
-// ---- Filesystem operation schema ----
-
 @Serializable
 enum class ActionKind {
     create
@@ -16,9 +9,6 @@ enum class ActionKind {
 
 @Serializable
 data class FsOperation(
-    // On Android this is a SAF document tree URI string (the user
-    // picks a destination folder via the system picker), not a
-    // Windows drive path -- see FilesystemEngine.kt for resolution.
     val rootPath: String,
     val directories: List<String> = emptyList(),
     val files: List<String> = emptyList()
@@ -29,9 +19,6 @@ data class FsRequest(
     val action: ActionKind,
     val operations: List<FsOperation>
 ) {
-    /** Structural validation only -- mirrors FsRequest::validate() in
-     *  the Windows operations.rs. Path-safety/SAF checks happen per
-     *  item in FilesystemEngine.kt at execution time. */
     fun validate(): String? {
         if (operations.isEmpty()) {
             return "Request contains no operations."
@@ -76,8 +63,6 @@ data class FsOperationResult(
     val errors: List<FsItemError>
 )
 
-// ---- Conversations ----
-
 enum class MessageRole {
     USER,
     ASSISTANT
@@ -89,13 +74,17 @@ data class ChatMessage(
     val role: MessageRole,
     val content: String,
     val createdAt: String,
-    // Native-chat feature additions. Defaults keep old saved
-    // conversations (written before this feature existed) loading
-    // fine with no migration step -- every prior message simply
-    // deserializes as liked=false, disliked=false, attachments=[].
     val liked: Boolean = false,
     val disliked: Boolean = false,
-    val attachments: List<Attachment> = emptyList()
+    val attachments: List<Attachment> = emptyList(),
+    // Client-generated status messages, never real AI output. Both
+    // default to false so old saved conversations still deserialize
+    // fine. Messages tagged either true are excluded from the history
+    // sent to the model (see ChatScreen.runTurn) -- this is the fix
+    // for the bug where a failed/stopped exchange got fed back to the
+    // AI as real context and confused the next unrelated prompt.
+    val isError: Boolean = false,
+    val isStopped: Boolean = false
 )
 
 @Serializable
@@ -112,8 +101,6 @@ data class ConversationSummary(
     val updatedAt: String
 )
 
-// ---- Attachments ----
-
 enum class AttachmentKind {
     TXT,
     MD
@@ -125,8 +112,6 @@ data class Attachment(
     val kind: AttachmentKind,
     val content: String
 )
-
-// ---- AI turn result ----
 
 data class AiTurnResult(
     val replyText: String,

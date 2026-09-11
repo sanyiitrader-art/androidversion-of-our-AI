@@ -59,6 +59,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fsstructurecreator.data.Attachment
@@ -231,6 +232,37 @@ private fun AiMessage(
     onDislike: () -> Unit,
     onRetry: () -> Unit
 ) {
+    // Stopped-generation placeholder: distinct grey/watermark status,
+    // no Copy/Like/Dislike (there is no real response to act on),
+    // Retry only -- it re-uses the exact same generic retry code path
+    // as any other assistant message, since it still occupies the
+    // normal assistant slot for its turn.
+    if (message.isStopped) {
+        Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            Text(
+                text = "You stopped this response.",
+                color = TextTertiary,
+                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                modifier = Modifier.padding(start = 4.dp)
+            )
+            Row(modifier = Modifier.padding(start = 4.dp, top = 4.dp)) {
+                IconButton(
+                    onClick = onRetry,
+                    enabled = isLatest,
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        Icons.Filled.Refresh,
+                        contentDescription = "Retry",
+                        tint = if (isLatest) TextSecondary else TextTertiary,
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
+            }
+        }
+        return
+    }
+
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         FormattedText(message.content)
 
@@ -385,6 +417,23 @@ private fun CodeBlockView(language: String, codeText: String) {
     }
 }
 
+// Explicit descending size/weight scale for H1-H6 -- previously all
+// three supported levels sat within 2sp of each other (17/16/15sp),
+// which is why they barely looked different. Only size/weight change
+// per level; color stays TextPrimary (white) for every level,
+// unchanged from before.
+private fun headingSize(level: Int): TextUnit = when (level) {
+    1 -> 21.sp
+    2 -> 19.sp
+    3 -> 17.sp
+    4 -> 15.5.sp
+    5 -> 14.5.sp
+    else -> 13.5.sp
+}
+
+private fun headingWeight(level: Int): FontWeight =
+    if (level <= 3) FontWeight.Bold else FontWeight.SemiBold
+
 @Composable
 private fun FormattedText(text: String) {
     val lines = text.split("\n")
@@ -407,14 +456,17 @@ private fun FormattedText(text: String) {
                 continue
             }
 
-            val headingMatch = Regex("^(#{1,3})\\s+(.*)$").find(line)
+            // Widened from {1,3} to {1,6} -- this was the entire cause
+            // of H4/H5/H6 rendering as literal "#### text" instead of
+            // headings; the regex simply never matched 4-6 hashes.
+            val headingMatch = Regex("^(#{1,6})\\s+(.*)$").find(line)
             if (headingMatch != null) {
                 val level = headingMatch.groupValues[1].length
                 InlineMarkdownText(
                     text = headingMatch.groupValues[2],
                     color = TextPrimary,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = (17 - level).sp
+                    fontWeight = headingWeight(level),
+                    fontSize = headingSize(level)
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 i++
@@ -464,7 +516,7 @@ private fun FormattedText(text: String) {
                 !lines[i].trim().startsWith("```") &&
                 !lines[i].trim().startsWith(">") &&
                 !(lines[i].trim().startsWith("- ") || lines[i].trim().startsWith("* ")) &&
-                !Regex("^#{1,3}\\s+").containsMatchIn(lines[i])
+                !Regex("^#{1,6}\\s+").containsMatchIn(lines[i])
             ) {
                 paraLines.add(lines[i])
                 i++

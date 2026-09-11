@@ -71,14 +71,18 @@ private const val KEY_SELECTED_FOLDER_URI = "selected_folder_uri"
 private fun newMessage(
     role: MessageRole,
     content: String,
-    attachments: List<Attachment> = emptyList()
+    attachments: List<Attachment> = emptyList(),
+    isError: Boolean = false,
+    isStopped: Boolean = false
 ): ChatMessage {
     return ChatMessage(
         id = UUID.randomUUID().toString(),
         role = role,
         content = content,
         createdAt = System.currentTimeMillis().toString(),
-        attachments = attachments
+        attachments = attachments,
+        isError = isError,
+        isStopped = isStopped
     )
 }
 
@@ -165,7 +169,15 @@ fun ChatScreen(
     var editApiOpen by remember { mutableStateOf(false) }
     var sending by remember { mutableStateOf(false) }
     var generationJob by remember { mutableStateOf<Job?>(null) }
-    var cancelledByUser by remember { mutableStateOf(false) }
+    // Bumped on every new generation AND on Pause. Any async
+    // completion (success or failure) captures its own token at
+    // launch time and checks it against this current value before
+    // writing anything back -- a stale/superseded result is silently
+    // discarded no matter what caused the staleness (pause, race,
+    // late failure, rapid resend). This replaces a simpler
+    // "cancelledByUser" flag, which itself could misbehave if two
+    // generations ever overlapped.
+    var generationToken by remember { mutableStateOf(0) }
     var pendingAttachments by remember { mutableStateOf<List<Attachment>>(emptyList()) }
     var pendingFsRequest by remember { mutableStateOf<FsRequest?>(null) }
     val listState = rememberLazyListState()
@@ -242,7 +254,13 @@ fun ChatScreen(
         userText: String,
         attachments: List<Attachment>
     ): String {
-        val turn = geminiClient.sendTurn(historyBeforeThisTurn, userText, attachments)
+        // Never send client-side error/stopped placeholders to the
+        // model as if they were real conversation turns -- this is
+        // the actual fix for a later unrelated prompt appearing to
+        // "continue" an earlier failed/stopped request.
+        val cleanHistory = historyBeforeThisTurn.filter { !it.isError && !it.isStopped }
+
+        val turn = geminiClient.sendTurn(cleanHistory, userText, attachments)
 
         if (turn.fsRequest == null) return turn.replyText
 
@@ -259,7 +277,7 @@ fun ChatScreen(
         val results = resolvedOps.map { fsEngine.executeOperation(it) }
         val summary = summarizeForAi(results)
 
-        val followUpHistory = historyBeforeThisTurn +
+        val followUpHistory = cleanHistory +
             newMessage(MessageRole.USER, userText, attachments) +
             newMessage(MessageRole.ASSISTANT, turn.replyText)
         val followUp = geminiClient.sendTurn(followUpHistory, summary, emptyList())
@@ -267,11 +285,24 @@ fun ChatScreen(
     }
 
     fun handlePause() {
-        cancelledByUser = true
+        val convo = session.conversation
+        generationToken++ // invalidates any in-flight completion immediately
         generationJob?.cancel()
         geminiClient.cancelActive()
-        sending = false
         generationJob = null
+
+        if (convo != null) {
+            // session.conversation already reflects "prompt in place,
+            // no response yet" for whichever handler started this
+            // generation -- append the stopped placeholder right into
+            // that assistant slot.
+            val stoppedMsg = newMessage(MessageRole.ASSISTANT, "", isStopped = true)
+            val updated = convo.copy(messages = convo.messages + stoppedMsg)
+            session.conversation = updated
+            conversationStore.saveConversation(updated)
+        }
+
+        sending = false
     }
 
     fun handleSend(text: String) {
@@ -292,10 +323,13 @@ fun ChatScreen(
         val attachmentsForSend = pendingAttachments
         pendingAttachments = emptyList()
         sending = true
+        generationToken++
+        val myToken = generationToken
 
         generationJob = scope.launch {
             try {
                 val assistantText = runTurn(historyBefore, text, attachmentsForSend)
+                if (myToken != generationToken) return@launch
                 val assistantMsg = newMessage(MessageRole.ASSISTANT, assistantText)
                 working = working.copy(
                     messages = working.messages + assistantMsg,
@@ -305,17 +339,16 @@ fun ChatScreen(
                 conversationStore.saveConversation(working)
                 refreshConversations()
             } catch (e: Exception) {
-                if (cancelledByUser) {
-                    cancelledByUser = false
-                } else {
-                    val errorMsg = newMessage(MessageRole.ASSISTANT, e.message ?: "Something went wrong.")
-                    working = working.copy(messages = working.messages + errorMsg)
-                    session.conversation = working
-                    conversationStore.saveConversation(working)
-                }
+                if (myToken != generationToken) return@launch
+                val errorMsg = newMessage(MessageRole.ASSISTANT, e.message ?: "Something went wrong.", isError = true)
+                working = working.copy(messages = working.messages + errorMsg)
+                session.conversation = working
+                conversationStore.saveConversation(working)
             } finally {
-                sending = false
-                generationJob = null
+                if (myToken == generationToken) {
+                    sending = false
+                    generationJob = null
+                }
             }
         }
     }
@@ -334,10 +367,13 @@ fun ChatScreen(
         val stripped = convo.copy(messages = messages.take(assistantIndex))
         session.conversation = stripped
         sending = true
+        generationToken++
+        val myToken = generationToken
 
         generationJob = scope.launch {
             try {
                 val assistantText = runTurn(historyBefore, userMsg.content, userMsg.attachments)
+                if (myToken != generationToken) return@launch
                 val newAssistantMsg = newMessage(MessageRole.ASSISTANT, assistantText)
                 val updated = stripped.copy(
                     messages = stripped.messages + newAssistantMsg,
@@ -346,17 +382,16 @@ fun ChatScreen(
                 session.conversation = updated
                 conversationStore.saveConversation(updated)
             } catch (e: Exception) {
-                if (cancelledByUser) {
-                    cancelledByUser = false
-                } else {
-                    val errorMsg = newMessage(MessageRole.ASSISTANT, e.message ?: "Something went wrong.")
-                    val updated = stripped.copy(messages = stripped.messages + errorMsg)
-                    session.conversation = updated
-                    conversationStore.saveConversation(updated)
-                }
+                if (myToken != generationToken) return@launch
+                val errorMsg = newMessage(MessageRole.ASSISTANT, e.message ?: "Something went wrong.", isError = true)
+                val updated = stripped.copy(messages = stripped.messages + errorMsg)
+                session.conversation = updated
+                conversationStore.saveConversation(updated)
             } finally {
-                sending = false
-                generationJob = null
+                if (myToken == generationToken) {
+                    sending = false
+                    generationJob = null
+                }
             }
         }
     }
@@ -379,10 +414,13 @@ fun ChatScreen(
         )
         session.conversation = working
         sending = true
+        generationToken++
+        val myToken = generationToken
 
         generationJob = scope.launch {
             try {
                 val assistantText = runTurn(historyBefore, newText, original.attachments)
+                if (myToken != generationToken) return@launch
                 val assistantMsg = newMessage(MessageRole.ASSISTANT, assistantText)
                 working = working.copy(
                     messages = working.messages + assistantMsg,
@@ -392,17 +430,16 @@ fun ChatScreen(
                 conversationStore.saveConversation(working)
                 refreshConversations()
             } catch (e: Exception) {
-                if (cancelledByUser) {
-                    cancelledByUser = false
-                } else {
-                    val errorMsg = newMessage(MessageRole.ASSISTANT, e.message ?: "Something went wrong.")
-                    working = working.copy(messages = working.messages + errorMsg)
-                    session.conversation = working
-                    conversationStore.saveConversation(working)
-                }
+                if (myToken != generationToken) return@launch
+                val errorMsg = newMessage(MessageRole.ASSISTANT, e.message ?: "Something went wrong.", isError = true)
+                working = working.copy(messages = working.messages + errorMsg)
+                session.conversation = working
+                conversationStore.saveConversation(working)
             } finally {
-                sending = false
-                generationJob = null
+                if (myToken == generationToken) {
+                    sending = false
+                    generationJob = null
+                }
             }
         }
     }
@@ -577,7 +614,8 @@ private suspend fun executeAndRespond(
     }
     val results = resolvedOps.map { fsEngine.executeOperation(it) }
     val summary = summarizeForAi(results)
-    val followUp = geminiClient.sendTurn(convo.messages, summary, emptyList())
+    val cleanHistory = convo.messages.filter { !it.isError && !it.isStopped }
+    val followUp = geminiClient.sendTurn(cleanHistory, summary, emptyList())
     val assistantMsg = newMessage(MessageRole.ASSISTANT, followUp.replyText)
     val updated = convo.copy(messages = convo.messages + assistantMsg)
     conversationStore.saveConversation(updated)

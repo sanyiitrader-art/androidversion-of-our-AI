@@ -1,7 +1,9 @@
 package com.fsstructurecreator.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -14,7 +16,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Send
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -116,7 +117,23 @@ fun MessageInputBar(
                         .padding(2.dp)
                 ) {
                     if (sending) {
-                        Icon(Icons.Filled.Stop, contentDescription = "Stop generating", tint = Mint)
+                        // Modern AI-generation stop control: a mint
+                        // rounded square with a smaller centered
+                        // charcoal rounded square inside it, replacing
+                        // the previous plain Stop icon (which read as
+                        // a generic media-player pause button).
+                        Box(
+                            modifier = Modifier
+                                .size(22.dp)
+                                .background(Mint, RoundedCornerShape(6.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(9.dp)
+                                    .background(CharcoalBg, RoundedCornerShape(2.dp))
+                            )
+                        }
                     } else {
                         Icon(Icons.Filled.Send, contentDescription = "Send", tint = Mint)
                     }
