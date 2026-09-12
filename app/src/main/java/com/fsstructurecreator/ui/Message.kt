@@ -344,10 +344,6 @@ private fun downloadCodeSnippet(context: Context, language: String, code: String
     resolver.update(uri, doneValues, null, null)
 }
 
-// Explicit divider Box elements added (not just padding) so the
-// gutter/code separation and header/body separation are unmistakably
-// visible regardless of anything else going on in the surrounding
-// theme -- this directly answers "the numbers look glued to the code".
 @Composable
 private fun CodeBlockView(language: String, codeText: String) {
     val context = LocalContext.current
@@ -384,7 +380,6 @@ private fun CodeBlockView(language: String, codeText: String) {
                     Icon(Icons.Filled.FileDownload, contentDescription = "Download code", tint = TextSecondary, modifier = Modifier.size(14.dp))
                 }
             }
-            // Horizontal divider below the header bar.
             Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(CharcoalBorder))
 
             Row(modifier = Modifier.padding(top = 6.dp, bottom = 8.dp)) {
@@ -402,7 +397,6 @@ private fun CodeBlockView(language: String, codeText: String) {
                         )
                     }
                 }
-                // Vertical divider between gutter and code.
                 Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(CharcoalBorder))
                 Box(
                     modifier = Modifier
@@ -434,6 +428,54 @@ private fun headingSize(level: Int): androidx.compose.ui.unit.TextUnit = when (l
 
 private fun headingWeight(level: Int): FontWeight =
     if (level <= 3) FontWeight.Bold else FontWeight.SemiBold
+
+// ---- Nested blockquote support (new) ----
+// Nesting level is the count of leading ">" characters, each
+// optionally followed by one space -- covers both ">>" and "> >"
+// written styles, matching the Windows parser exactly.
+private data class QuoteLine(val level: Int, val text: String)
+
+private fun parseQuoteLine(raw: String): QuoteLine {
+    var level = 0
+    var idx = 0
+    while (idx < raw.length && raw[idx] == '>') {
+        level++
+        idx++
+        if (idx < raw.length && raw[idx] == ' ') idx++
+    }
+    return QuoteLine(level.coerceAtLeast(1), raw.substring(idx))
+}
+
+// Recursively renders one level of quote nesting -- reuses the exact
+// same Box(border)+Spacer+InlineMarkdownText pattern the single-level
+// blockquote already used, just called again for each deeper level,
+// so nested quotes stack their own border+indent naturally with zero
+// change to the existing single-level appearance.
+@Composable
+private fun QuoteLevelView(items: List<QuoteLine>, level: Int) {
+    Row(modifier = Modifier.padding(vertical = 2.dp).height(IntrinsicSize.Min)) {
+        Box(modifier = Modifier.width(3.dp).fillMaxHeight().background(CharcoalBorder))
+        Spacer(modifier = Modifier.width(8.dp))
+        Column {
+            var i = 0
+            while (i < items.size) {
+                if (items[i].level <= level) {
+                    val textRun = mutableListOf<String>()
+                    while (i < items.size && items[i].level <= level) {
+                        textRun.add(items[i].text)
+                        i++
+                    }
+                    InlineMarkdownText(text = textRun.joinToString("\n"), color = TextPrimary)
+                } else {
+                    val runStart = i
+                    while (i < items.size && items[i].level > level) i++
+                    val run = items.subList(runStart, i)
+                    QuoteLevelView(run, level + 1)
+                }
+            }
+        }
+    }
+}
 
 @Composable
 private fun FormattedText(text: String) {
@@ -472,16 +514,13 @@ private fun FormattedText(text: String) {
             }
 
             if (line.trim().startsWith(">")) {
-                val quoteLines = mutableListOf<String>()
+                val rawQuoteLines = mutableListOf<String>()
                 while (i < lines.size && lines[i].trim().startsWith(">")) {
-                    quoteLines.add(lines[i].trim().removePrefix(">").trim())
+                    rawQuoteLines.add(lines[i].trim())
                     i++
                 }
-                Row(modifier = Modifier.padding(vertical = 4.dp).height(IntrinsicSize.Min)) {
-                    Box(modifier = Modifier.width(3.dp).fillMaxHeight().background(CharcoalBorder))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    InlineMarkdownText(text = quoteLines.joinToString("\n"), color = TextPrimary)
-                }
+                val quoteItems = rawQuoteLines.map { parseQuoteLine(it) }
+                QuoteLevelView(quoteItems, 1)
                 continue
             }
 
