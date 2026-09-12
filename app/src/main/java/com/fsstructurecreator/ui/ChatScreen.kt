@@ -124,6 +124,26 @@ private fun currentlyValidFolderUri(context: Context, prefs: android.content.Sha
     return saved
 }
 
+// The real, new fix for this session: previously only assistant
+// error/stopped messages were filtered out of the history sent to the
+// model, leaving the paired user message dangling and unanswered
+// right before the next prompt -- the model reasonably treated the
+// next prompt as continuing that unfinished request. This drops BOTH
+// halves of any never-completed turn, matching the Windows fix.
+private fun buildCleanHistory(messages: List<ChatMessage>): List<ChatMessage> {
+    val result = mutableListOf<ChatMessage>()
+    for (m in messages) {
+        if (m.role == MessageRole.ASSISTANT && (m.isError || m.isStopped)) {
+            if (result.isNotEmpty() && result.last().role == MessageRole.USER) {
+                result.removeAt(result.size - 1)
+            }
+            continue
+        }
+        result.add(m)
+    }
+    return result
+}
+
 @Composable
 private fun TypingDots() {
     val transition = rememberInfiniteTransition(label = "typing")
@@ -169,14 +189,6 @@ fun ChatScreen(
     var editApiOpen by remember { mutableStateOf(false) }
     var sending by remember { mutableStateOf(false) }
     var generationJob by remember { mutableStateOf<Job?>(null) }
-    // Bumped on every new generation AND on Pause. Any async
-    // completion (success or failure) captures its own token at
-    // launch time and checks it against this current value before
-    // writing anything back -- a stale/superseded result is silently
-    // discarded no matter what caused the staleness (pause, race,
-    // late failure, rapid resend). This replaces a simpler
-    // "cancelledByUser" flag, which itself could misbehave if two
-    // generations ever overlapped.
     var generationToken by remember { mutableStateOf(0) }
     var pendingAttachments by remember { mutableStateOf<List<Attachment>>(emptyList()) }
     var pendingFsRequest by remember { mutableStateOf<FsRequest?>(null) }
@@ -254,11 +266,7 @@ fun ChatScreen(
         userText: String,
         attachments: List<Attachment>
     ): String {
-        // Never send client-side error/stopped placeholders to the
-        // model as if they were real conversation turns -- this is
-        // the actual fix for a later unrelated prompt appearing to
-        // "continue" an earlier failed/stopped request.
-        val cleanHistory = historyBeforeThisTurn.filter { !it.isError && !it.isStopped }
+        val cleanHistory = buildCleanHistory(historyBeforeThisTurn)
 
         val turn = geminiClient.sendTurn(cleanHistory, userText, attachments)
 
@@ -286,16 +294,12 @@ fun ChatScreen(
 
     fun handlePause() {
         val convo = session.conversation
-        generationToken++ // invalidates any in-flight completion immediately
+        generationToken++
         generationJob?.cancel()
         geminiClient.cancelActive()
         generationJob = null
 
         if (convo != null) {
-            // session.conversation already reflects "prompt in place,
-            // no response yet" for whichever handler started this
-            // generation -- append the stopped placeholder right into
-            // that assistant slot.
             val stoppedMsg = newMessage(MessageRole.ASSISTANT, "", isStopped = true)
             val updated = convo.copy(messages = convo.messages + stoppedMsg)
             session.conversation = updated
@@ -614,7 +618,7 @@ private suspend fun executeAndRespond(
     }
     val results = resolvedOps.map { fsEngine.executeOperation(it) }
     val summary = summarizeForAi(results)
-    val cleanHistory = convo.messages.filter { !it.isError && !it.isStopped }
+    val cleanHistory = buildCleanHistory(convo.messages)
     val followUp = geminiClient.sendTurn(cleanHistory, summary, emptyList())
     val assistantMsg = newMessage(MessageRole.ASSISTANT, followUp.replyText)
     val updated = convo.copy(messages = convo.messages + assistantMsg)

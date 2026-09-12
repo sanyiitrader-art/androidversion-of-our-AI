@@ -59,7 +59,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
-import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fsstructurecreator.data.Attachment
@@ -232,11 +231,6 @@ private fun AiMessage(
     onDislike: () -> Unit,
     onRetry: () -> Unit
 ) {
-    // Stopped-generation placeholder: distinct grey/watermark status,
-    // no Copy/Like/Dislike (there is no real response to act on),
-    // Retry only -- it re-uses the exact same generic retry code path
-    // as any other assistant message, since it still occupies the
-    // normal assistant slot for its turn.
     if (message.isStopped) {
         Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
             Text(
@@ -350,6 +344,10 @@ private fun downloadCodeSnippet(context: Context, language: String, code: String
     resolver.update(uri, doneValues, null, null)
 }
 
+// Explicit divider Box elements added (not just padding) so the
+// gutter/code separation and header/body separation are unmistakably
+// visible regardless of anything else going on in the surrounding
+// theme -- this directly answers "the numbers look glued to the code".
 @Composable
 private fun CodeBlockView(language: String, codeText: String) {
     val context = LocalContext.current
@@ -369,7 +367,7 @@ private fun CodeBlockView(language: String, codeText: String) {
         Column {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 4.dp)
+                modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 6.dp)
             ) {
                 Text(language, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                 Spacer(modifier = Modifier.weight(1f))
@@ -386,8 +384,14 @@ private fun CodeBlockView(language: String, codeText: String) {
                     Icon(Icons.Filled.FileDownload, contentDescription = "Download code", tint = TextSecondary, modifier = Modifier.size(14.dp))
                 }
             }
-            Row(modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)) {
-                Column(modifier = Modifier.padding(start = 12.dp, end = 8.dp)) {
+            // Horizontal divider below the header bar.
+            Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(CharcoalBorder))
+
+            Row(modifier = Modifier.padding(top = 6.dp, bottom = 8.dp)) {
+                Column(
+                    modifier = Modifier.padding(start = 10.dp, end = 10.dp),
+                    horizontalAlignment = Alignment.End
+                ) {
                     for (n in 1..lineCount) {
                         Text(
                             text = n.toString(),
@@ -398,11 +402,13 @@ private fun CodeBlockView(language: String, codeText: String) {
                         )
                     }
                 }
+                // Vertical divider between gutter and code.
+                Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(CharcoalBorder))
                 Box(
                     modifier = Modifier
                         .weight(1f)
                         .horizontalScroll(scrollState)
-                        .padding(end = 12.dp)
+                        .padding(start = 10.dp, end = 12.dp)
                 ) {
                     Text(
                         text = highlighted,
@@ -417,12 +423,7 @@ private fun CodeBlockView(language: String, codeText: String) {
     }
 }
 
-// Explicit descending size/weight scale for H1-H6 -- previously all
-// three supported levels sat within 2sp of each other (17/16/15sp),
-// which is why they barely looked different. Only size/weight change
-// per level; color stays TextPrimary (white) for every level,
-// unchanged from before.
-private fun headingSize(level: Int): TextUnit = when (level) {
+private fun headingSize(level: Int): androidx.compose.ui.unit.TextUnit = when (level) {
     1 -> 21.sp
     2 -> 19.sp
     3 -> 17.sp
@@ -456,9 +457,6 @@ private fun FormattedText(text: String) {
                 continue
             }
 
-            // Widened from {1,3} to {1,6} -- this was the entire cause
-            // of H4/H5/H6 rendering as literal "#### text" instead of
-            // headings; the regex simply never matched 4-6 hashes.
             val headingMatch = Regex("^(#{1,6})\\s+(.*)$").find(line)
             if (headingMatch != null) {
                 val level = headingMatch.groupValues[1].length
